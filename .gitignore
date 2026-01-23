@@ -1,15 +1,38 @@
+# --- Built artifacts ---
+bin/
+gen/
+out/
+build/
+.gradle/
+
+# --- IDE Files ---
+.idea/
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+capture/
+.vscode/
+*.iml
+.gradle/
+build/
 local.properties
+
+# --- Local configuration (SENSITIVE) ---
+# Never share your local.properties (it contains your SDK path)
+local.properties
+
+# --- Keystores & Signing ---
+# Never share your signing keys on GitHub!
+*.jks
+*.keystore
+*.p12
+
+# --- OS generated files ---
+.DS_Store
+Thumbs.db
+
+# --- Log files ---
+*.log

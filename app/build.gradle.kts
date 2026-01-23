@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.radioapp"
+    namespace = "com.example.dashtune"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.radioapp"
+        applicationId = "com.example.dashtune"
         minSdk = 24
         targetSdk = 35
         versionCode = 1
@@ -39,9 +39,6 @@ android {
     buildFeatures {
         compose = true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.8"
-    }
 }
 
 dependencies {
@@ -64,7 +61,8 @@ dependencies {
     
     // Networking
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation("com.squareup.retrofit2:converter-moshi:2.9.0")
+    implementation("com.squareup.moshi:moshi-kotlin:1.15.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     
     // Image Loading
