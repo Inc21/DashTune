@@ -6,8 +6,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -22,6 +20,9 @@ import androidx.compose.material3.LocalContentColor
 import com.example.dashtune.data.model.RadioStation
 import java.util.*
 import androidx.compose.foundation.border
+import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,23 +71,69 @@ fun StationCard(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Thumbnail Image - now a small square that doesn't take the full width
+            // Thumbnail Image with overlays
             Box(
                 modifier = Modifier
                     .size(80.dp)
                     .padding(bottom = 8.dp)
             ) {
-                // Station number badge (top-left corner)
+                StationImage(
+                    imageUrl = station.imageUrl,
+                    contentDescription = station.name,
+                    modifier = Modifier.fillMaxSize()
+                )
+                
+                // Center overlay for playing/loading state (moved before station number so number stays on top)
+                if (isPlaying || isLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.4f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isLoading) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "rotation")
+                            val rotation by infiniteTransition.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 360f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(1000, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Restart
+                                ),
+                                label = "rotation"
+                            )
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Loading",
+                                tint = Color.White,
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .graphicsLayer { rotationZ = rotation }
+                            )
+                        } else if (isPlaying) {
+                            AudioBarsAnimation(
+                                modifier = Modifier.size(32.dp),
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+                
+                // Station number badge (top-left corner, rendered last so it stays on top)
                 stationNumber?.let { number ->
                     Surface(
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .size(24.dp),
+                            .size(26.dp)
+                            .shadow(
+                                elevation = 4.dp,
+                                shape = MaterialTheme.shapes.small
+                            ),
                         shape = MaterialTheme.shapes.small,
-                        color = MaterialTheme.colorScheme.primary,
-                        tonalElevation = 4.dp
+                        color = MaterialTheme.colorScheme.primary
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
@@ -94,32 +141,11 @@ fun StationCard(
                         ) {
                             Text(
                                 text = number.toString(),
-                                style = MaterialTheme.typography.labelSmall,
+                                style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onPrimary,
                                 textAlign = TextAlign.Center
                             )
                         }
-                    }
-                }
-                StationImage(
-                    imageUrl = station.imageUrl,
-                    contentDescription = station.name,
-                    modifier = Modifier.fillMaxSize()
-                )
-                
-                // Overlay indicator for active state
-                if (isPlaying) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(4.dp),
-                        contentAlignment = Alignment.TopEnd
-                    ) {
-                        Surface(
-                            shape = MaterialTheme.shapes.small,
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                            modifier = Modifier.size(8.dp)
-                        ) {}
                     }
                 }
             }
@@ -130,7 +156,7 @@ fun StationCard(
             Text(
                 text = station.name,
                 style = MaterialTheme.typography.titleMedium,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
@@ -212,50 +238,19 @@ fun StationCard(
             
             Spacer(modifier = Modifier.weight(1f))
             
-            // Control Buttons
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+            // Favorite Button (centered)
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
             ) {
-                // Play/Loading Button
-                IconButton(onClick = onPlayClick) {
-                    if (isLoading) {
-                        val infiniteTransition = rememberInfiniteTransition(label = "rotation")
-                        val rotation by infiniteTransition.animateFloat(
-                            initialValue = 0f,
-                            targetValue = 360f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1000, easing = LinearEasing),
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "rotation"
-                        )
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Loading",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .size(24.dp)
-                                .graphicsLayer { rotationZ = rotation }
-                        )
-                    } else {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-
                 IconButton(onClick = onSaveClick) {
                     Icon(
-                        imageVector = if (isSaved) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        imageVector = if (isSaved || isPlaying) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                         contentDescription = if (isSaved) "Remove from favorites" else "Add to favorites",
-                        tint = if (isSaved) MaterialTheme.colorScheme.primary else LocalContentColor.current
+                        tint = if (isSaved || isPlaying) MaterialTheme.colorScheme.primary else LocalContentColor.current
                     )
                 }
             }
         }
     }
-} 
+}

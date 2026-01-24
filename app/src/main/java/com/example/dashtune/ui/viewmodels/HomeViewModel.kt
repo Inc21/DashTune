@@ -31,6 +31,8 @@ class HomeViewModel @Inject constructor(
     val isPlaying = playbackManager.isPlaying
     val currentStation = playbackManager.currentStation
     val isBuffering = playbackManager.isBuffering
+    val currentMetadata = playbackManager.currentMetadata
+    val volumeMultiplier = playbackManager.volumeMultiplier
     
     private val _validatingStationId = MutableStateFlow<String?>(null)
     val validatingStationId = _validatingStationId.asStateFlow()
@@ -86,6 +88,10 @@ class HomeViewModel @Inject constructor(
                 stationRepository.updateStationOrder(station.id, index)
             }
         }
+    }
+
+    fun setVolumeMultiplier(value: Float) {
+        playbackManager.setVolumeMultiplier(value)
     }
 
     override fun onCleared() {

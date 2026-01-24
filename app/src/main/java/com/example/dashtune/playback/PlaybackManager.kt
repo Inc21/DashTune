@@ -25,6 +25,8 @@ class PlaybackManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val stationRepository: RadioStationRepository
 ) {
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
     private val _currentStation = MutableStateFlow<RadioStation?>(null)
     val currentStation: StateFlow<RadioStation?> = _currentStation.asStateFlow()
 
@@ -34,10 +36,21 @@ class PlaybackManager @Inject constructor(
     private val _isBuffering = MutableStateFlow(false)
     val isBuffering: StateFlow<Boolean> = _isBuffering.asStateFlow()
 
+    private val _currentMetadata = MutableStateFlow<Pair<String?, String?>?>(null)
+    val currentMetadata: StateFlow<Pair<String?, String?>?> = _currentMetadata.asStateFlow()
+
+    private val _volumeMultiplier = MutableStateFlow(
+        prefs.getFloat(KEY_VOLUME_MULTIPLIER, DEFAULT_VOLUME_MULTIPLIER)
+    )
+    val volumeMultiplier: StateFlow<Float> = _volumeMultiplier.asStateFlow()
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as RadioPlayerService.RadioPlayerBinder
             playerService = binder.getService()
+
+            // Apply saved volume multiplier when service connects
+            playerService?.setVolumeMultiplier(_volumeMultiplier.value)
 
             // Set listeners for playback state changes
             playerService?.setPlaybackStateListener(object : RadioPlayerService.PlaybackStateListener {
@@ -67,6 +80,10 @@ class PlaybackManager @Inject constructor(
                             }
                         }
                     }
+                }
+
+                override fun onMetadataChanged(title: String?, artist: String?) {
+                    _currentMetadata.value = Pair(title, artist)
                 }
             })
 
@@ -113,10 +130,10 @@ class PlaybackManager @Inject constructor(
             if (currentlyPlayingStation != null) {
                 playerService?.stop()
             }
-            
+
             _currentStation.value = station
             _isBuffering.value = false
-            
+
             if (playerService != null) {
                 playerService?.playStation(station)
             } else {
@@ -132,6 +149,13 @@ class PlaybackManager @Inject constructor(
         _isPlaying.value = false
     }
 
+    fun setVolumeMultiplier(value: Float) {
+        val clamped = value.coerceIn(MIN_VOLUME_MULTIPLIER, MAX_VOLUME_MULTIPLIER)
+        _volumeMultiplier.value = clamped
+        prefs.edit().putFloat(KEY_VOLUME_MULTIPLIER, clamped).apply()
+        playerService?.setVolumeMultiplier(clamped)
+    }
+
     fun release() {
         if (isBound) {
             playerService?.let {
@@ -144,5 +168,10 @@ class PlaybackManager @Inject constructor(
 
     companion object {
         private const val TAG = "PlaybackManager"
+        private const val PREFS_NAME = "dashtune_prefs"
+        private const val KEY_VOLUME_MULTIPLIER = "volume_multiplier"
+        private const val DEFAULT_VOLUME_MULTIPLIER = 0.7f
+        private const val MIN_VOLUME_MULTIPLIER = 0.2f
+        private const val MAX_VOLUME_MULTIPLIER = 1.0f
     }
-} 
+}

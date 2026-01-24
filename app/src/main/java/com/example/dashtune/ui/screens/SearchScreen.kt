@@ -5,13 +5,18 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -21,6 +26,8 @@ import com.example.dashtune.ui.components.SearchBar
 import com.example.dashtune.ui.components.StationCard
 import com.example.dashtune.ui.viewmodels.SearchViewModel
 import com.example.dashtune.ui.viewmodels.SearchFilters
+import com.example.dashtune.ui.viewmodels.SortOrder
+import androidx.compose.material.icons.filled.ArrowDropDown
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +107,8 @@ fun SearchScreen(
                     errorMessage = errorMessage,
                     hasMoreResults = hasMoreResults,
                     isLoadingMore = isLoadingMore,
+                    currentSortOrder = currentFilters.sortOrder,
+                    onSortOrderChange = { viewModel.updateSortOrder(it) },
                     onPlayClick = { viewModel.togglePlayback(it) },
                     onSaveClick = { viewModel.toggleSave(it) },
                     onClearError = { viewModel.clearErrorMessage() },
@@ -119,6 +128,8 @@ fun SearchScreen(
                     validatingStationId = validatingStationId,
                     savedStationIds = savedStationIds,
                     currentFilters = currentFilters,
+                    currentSortOrder = currentFilters.sortOrder,
+                    onSortOrderChange = { viewModel.updateSortOrder(it) },
                     onPlayClick = { viewModel.togglePlayback(it) },
                     onSaveClick = { viewModel.toggleSave(it) },
                     onClearSelection = { viewModel.clearFilters() }
@@ -135,6 +146,8 @@ fun SearchScreen(
                     validatingStationId = validatingStationId,
                     savedStationIds = savedStationIds,
                     currentFilters = currentFilters,
+                    currentSortOrder = currentFilters.sortOrder,
+                    onSortOrderChange = { viewModel.updateSortOrder(it) },
                     onPlayClick = { viewModel.togglePlayback(it) },
                     onSaveClick = { viewModel.toggleSave(it) },
                     onClearSelection = { viewModel.clearFilters() }
@@ -151,6 +164,8 @@ fun SearchScreen(
                     validatingStationId = validatingStationId,
                     savedStationIds = savedStationIds,
                     currentFilters = currentFilters,
+                    currentSortOrder = currentFilters.sortOrder,
+                    onSortOrderChange = { viewModel.updateSortOrder(it) },
                     onPlayClick = { viewModel.togglePlayback(it) },
                     onSaveClick = { viewModel.toggleSave(it) },
                     onClearSelection = { viewModel.clearFilters() }
@@ -173,11 +188,16 @@ fun SearchTab(
     errorMessage: String?,
     hasMoreResults: Boolean,
     isLoadingMore: Boolean,
+    currentSortOrder: SortOrder,
+    onSortOrderChange: (SortOrder) -> Unit,
     onPlayClick: (RadioStation) -> Unit,
     onSaveClick: (RadioStation) -> Unit,
     onClearError: () -> Unit,
     onLoadMore: () -> Unit
 ) {
+    var showSortMenu by remember { mutableStateOf(false) }
+    var showInfoTip by remember { mutableStateOf(true) }
+    
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -185,43 +205,65 @@ fun SearchTab(
     ) {
         Spacer(modifier = Modifier.height(16.dp))
         
-        SearchBar(
-            query = searchQuery,
-            onQueryChange = onSearchQueryChange,
-            modifier = Modifier.fillMaxWidth()
-        )
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        // Info tip
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+        Box(modifier = Modifier.fillMaxWidth()) {
+            SearchBar(
+                query = searchQuery,
+                onQueryChange = onSearchQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                trailingIcon = Icons.Default.Sort,
+                onTrailingIconClick = { showSortMenu = true }
             )
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.Start,
-                verticalAlignment = Alignment.Top
+            
+            DropdownMenu(
+                expanded = showSortMenu,
+                onDismissRequest = { showSortMenu = false }
             ) {
-                Icon(
-                    imageVector = Icons.Default.Info,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp)
+                DropdownMenuItem(
+                    text = { Text("Most Liked") },
+                    onClick = {
+                        onSortOrderChange(SortOrder.MOST_LIKED)
+                        showSortMenu = false
+                    }
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Tip: Station listings may not always be accurate. Try searching by name if browsing doesn't find what you need.",
-                    style = MaterialTheme.typography.bodySmall
+                DropdownMenuItem(
+                    text = { Text("Least Liked") },
+                    onClick = {
+                        onSortOrderChange(SortOrder.LEAST_LIKED)
+                        showSortMenu = false
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Highest Bitrate") },
+                    onClick = {
+                        onSortOrderChange(SortOrder.BITRATE_DESC)
+                        showSortMenu = false
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Lowest Bitrate") },
+                    onClick = {
+                        onSortOrderChange(SortOrder.BITRATE_ASC)
+                        showSortMenu = false
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("A-Z") },
+                    onClick = {
+                        onSortOrderChange(SortOrder.NAME_ASC)
+                        showSortMenu = false
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Z-A") },
+                    onClick = {
+                        onSortOrderChange(SortOrder.NAME_DESC)
+                        showSortMenu = false
+                    }
                 )
             }
         }
+        
+        Spacer(modifier = Modifier.height(8.dp))
         
         // Error message display
         if (errorMessage != null) {
@@ -266,18 +308,62 @@ fun SearchTab(
                 Text("No stations found")
             }
         } else if (searchQuery.length >= 2) {
-            Text(
-                text = "Search Results (${searchResults.size})",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-            
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 160.dp),
                 contentPadding = PaddingValues(vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // Info tip - dismissable and scrolls with content
+                if (showInfoTip) {
+                    item(span = { GridItemSpan(this.maxLineSpan) }) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    horizontalArrangement = Arrangement.Start,
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Info,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Tip: Station listings may not always be accurate. Try searching by name if browsing doesn't find what you need.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { showInfoTip = false },
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Dismiss tip",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 items(searchResults) { station ->
                     val isCurrentlyPlaying = currentStation?.id == station.id && isPlaying
                     val isValidating = validatingStationId == station.id
@@ -332,11 +418,14 @@ fun CountriesTab(
     validatingStationId: String?,
     savedStationIds: Set<String>,
     currentFilters: SearchFilters,
+    currentSortOrder: SortOrder,
+    onSortOrderChange: (SortOrder) -> Unit,
     onPlayClick: (RadioStation) -> Unit,
     onSaveClick: (RadioStation) -> Unit,
     onClearSelection: () -> Unit
 ) {
     var countrySearchQuery by remember { mutableStateOf("") }
+    var showSortMenu by remember { mutableStateOf(false) }
     
     Column(
         modifier = Modifier
@@ -350,7 +439,7 @@ fun CountriesTab(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp),
+                    .padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -362,6 +451,67 @@ fun CountriesTab(
                     Text("Back to Countries")
                 }
             }
+            
+            Box(modifier = Modifier.fillMaxWidth()) {
+                SearchBar(
+                    query = "",
+                    onQueryChange = {},
+                    placeholder = "Sort stations...",
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = Icons.Default.Sort,
+                    onTrailingIconClick = { showSortMenu = true }
+                )
+                
+                DropdownMenu(
+                    expanded = showSortMenu,
+                    onDismissRequest = { showSortMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Most Liked") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.MOST_LIKED)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Least Liked") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.LEAST_LIKED)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Highest Bitrate") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.BITRATE_DESC)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Lowest Bitrate") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.BITRATE_ASC)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("A-Z") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.NAME_ASC)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Z-A") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.NAME_DESC)
+                            showSortMenu = false
+                        }
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
             
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 160.dp),
@@ -399,6 +549,7 @@ fun CountriesTab(
             SearchBar(
                 query = countrySearchQuery,
                 onQueryChange = { countrySearchQuery = it },
+                placeholder = "Search for countries...",
                 modifier = Modifier.fillMaxWidth()
             )
             
@@ -456,11 +607,14 @@ fun LanguagesTab(
     validatingStationId: String?,
     savedStationIds: Set<String>,
     currentFilters: SearchFilters,
+    currentSortOrder: SortOrder,
+    onSortOrderChange: (SortOrder) -> Unit,
     onPlayClick: (RadioStation) -> Unit,
     onSaveClick: (RadioStation) -> Unit,
     onClearSelection: () -> Unit
 ) {
     var languageSearchQuery by remember { mutableStateOf("") }
+    var showSortMenu by remember { mutableStateOf(false) }
     
     Column(
         modifier = Modifier
@@ -474,7 +628,7 @@ fun LanguagesTab(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp),
+                    .padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -486,6 +640,67 @@ fun LanguagesTab(
                     Text("Back to Languages")
                 }
             }
+            
+            Box(modifier = Modifier.fillMaxWidth()) {
+                SearchBar(
+                    query = "",
+                    onQueryChange = {},
+                    placeholder = "Sort stations...",
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = Icons.Default.Sort,
+                    onTrailingIconClick = { showSortMenu = true }
+                )
+                
+                DropdownMenu(
+                    expanded = showSortMenu,
+                    onDismissRequest = { showSortMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Most Liked") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.MOST_LIKED)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Least Liked") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.LEAST_LIKED)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Highest Bitrate") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.BITRATE_DESC)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Lowest Bitrate") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.BITRATE_ASC)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("A-Z") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.NAME_ASC)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Z-A") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.NAME_DESC)
+                            showSortMenu = false
+                        }
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
             
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 160.dp),
@@ -523,6 +738,7 @@ fun LanguagesTab(
             SearchBar(
                 query = languageSearchQuery,
                 onQueryChange = { languageSearchQuery = it },
+                placeholder = "Search for languages...",
                 modifier = Modifier.fillMaxWidth()
             )
             
@@ -580,11 +796,14 @@ fun GenresTab(
     validatingStationId: String?,
     savedStationIds: Set<String>,
     currentFilters: SearchFilters,
+    currentSortOrder: SortOrder,
+    onSortOrderChange: (SortOrder) -> Unit,
     onPlayClick: (RadioStation) -> Unit,
     onSaveClick: (RadioStation) -> Unit,
     onClearSelection: () -> Unit
 ) {
     var genreSearchQuery by remember { mutableStateOf("") }
+    var showSortMenu by remember { mutableStateOf(false) }
     
     Column(
         modifier = Modifier
@@ -598,7 +817,7 @@ fun GenresTab(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp),
+                    .padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -610,6 +829,67 @@ fun GenresTab(
                     Text("Back to Genres")
                 }
             }
+            
+            Box(modifier = Modifier.fillMaxWidth()) {
+                SearchBar(
+                    query = "",
+                    onQueryChange = {},
+                    placeholder = "Sort stations...",
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = Icons.Default.Sort,
+                    onTrailingIconClick = { showSortMenu = true }
+                )
+                
+                DropdownMenu(
+                    expanded = showSortMenu,
+                    onDismissRequest = { showSortMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Most Liked") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.MOST_LIKED)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Least Liked") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.LEAST_LIKED)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Highest Bitrate") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.BITRATE_DESC)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Lowest Bitrate") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.BITRATE_ASC)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("A-Z") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.NAME_ASC)
+                            showSortMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Z-A") },
+                        onClick = {
+                            onSortOrderChange(SortOrder.NAME_DESC)
+                            showSortMenu = false
+                        }
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
             
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 160.dp),
@@ -647,6 +927,7 @@ fun GenresTab(
             SearchBar(
                 query = genreSearchQuery,
                 onQueryChange = { genreSearchQuery = it },
+                placeholder = "Search for genres...",
                 modifier = Modifier.fillMaxWidth()
             )
             

@@ -8,10 +8,12 @@ import android.content.Context
 import android.content.Intent
 import android.os.Binder
 import android.os.Build
-import android.os.IBinder
 import android.os.Handler
+import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -32,6 +34,7 @@ class RadioPlayerService : Service() {
     private lateinit var mediaSession: MediaSession
     private lateinit var notificationBuilder: NotificationCompat.Builder
     private val handler = Handler()
+    private var volumeMultiplier = 1.0f
     
     private var currentStation: RadioStation? = null
     private var playbackStateListener: PlaybackStateListener? = null
@@ -44,6 +47,7 @@ class RadioPlayerService : Service() {
         fun onPlaybackStateChanged(isPlaying: Boolean)
         fun onBufferingStateChanged(isBuffering: Boolean)
         fun onError(errorMessage: String)
+        fun onMetadataChanged(title: String?, artist: String?)
     }
 
     fun setPlaybackStateListener(listener: PlaybackStateListener) {
@@ -58,10 +62,18 @@ class RadioPlayerService : Service() {
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("DashTune/1.0")
         
+        val audioAttributes = AudioAttributes.Builder()
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .setUsage(C.USAGE_MEDIA)
+            .build()
+
         // Initialize ExoPlayer with custom DataSource that follows redirects
         player = ExoPlayer.Builder(this)
+            .setAudioAttributes(audioAttributes, true)
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory))
             .build()
+            
+        player.volume = volumeMultiplier
             
         // Set up player listeners for error handling
         player.addListener(object : Player.Listener {
@@ -85,6 +97,13 @@ class RadioPlayerService : Service() {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 playbackStateListener?.onPlaybackStateChanged(isPlaying)
                 updateNotification()
+            }
+            
+            override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) {
+                val title = mediaMetadata.title?.toString()
+                val artist = mediaMetadata.artist?.toString()
+                Log.d(TAG, "Metadata changed - Title: $title, Artist: $artist")
+                playbackStateListener?.onMetadataChanged(title, artist)
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -110,9 +129,11 @@ class RadioPlayerService : Service() {
 
     private fun setupMediaSession() {
         mediaSession = MediaSession.Builder(this, player)
-            .setId("RadioPlayerService")
+            .setId("DashTuneMediaSession")
             .build()
     }
+    
+    fun getMediaSession(): MediaSession = mediaSession
 
     private fun setupNotification() {
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -232,6 +253,12 @@ class RadioPlayerService : Service() {
         playbackStateListener?.onPlaybackStateChanged(false)
         playbackStateListener?.onBufferingStateChanged(false)
         stopForeground(true)
+    }
+
+    fun setVolumeMultiplier(value: Float) {
+        volumeMultiplier = value.coerceIn(0.2f, 1.0f)
+        player.volume = volumeMultiplier
+        Log.d(TAG, "Volume multiplier set to $volumeMultiplier")
     }
 
     override fun onBind(intent: Intent): IBinder {

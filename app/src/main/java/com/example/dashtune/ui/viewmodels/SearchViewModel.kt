@@ -15,10 +15,20 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+enum class SortOrder {
+    MOST_LIKED,
+    LEAST_LIKED,
+    BITRATE_DESC,
+    BITRATE_ASC,
+    NAME_ASC,
+    NAME_DESC
+}
+
 data class SearchFilters(
     val country: String? = null,
     val language: String? = null,
-    val genre: String? = null
+    val genre: String? = null,
+    val sortOrder: SortOrder = SortOrder.MOST_LIKED
 )
 
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
@@ -144,7 +154,7 @@ class SearchViewModel @Inject constructor(
                 }
                 .catch { /* Handle error */ }
                 .collect { stations ->
-                    _searchResults.value = stations
+                    _searchResults.value = applySorting(stations, _searchFilters.value.sortOrder)
                     // If we got 100 results, there might be more
                     _hasMoreResults.value = stations.size >= 100
                     _currentOffset.value = stations.size
@@ -161,15 +171,33 @@ class SearchViewModel @Inject constructor(
         
         viewModelScope.launch {
             radioRepository.getLanguages().collect { languages ->
-                _languages.value = languages
+                _languages.value = cleanupFilterList(languages)
             }
         }
         
         viewModelScope.launch {
             radioRepository.getGenres().collect { genres ->
-                _genres.value = genres
+                _genres.value = cleanupFilterList(genres)
             }
         }
+    }
+    
+    private fun cleanupFilterList(items: List<Map<String, String>>): List<Map<String, String>> {
+        return items
+            .filter { item ->
+                val name = item["name"]?.trim() ?: ""
+                val stationCount = item["stationcount"]?.toIntOrNull() ?: 0
+                // Filter out entries with less than 10 stations and empty names
+                name.isNotBlank() && stationCount >= 10
+            }
+            .map { item ->
+                // Trim whitespace from names
+                item.toMutableMap().apply {
+                    this["name"] = this["name"]?.trim() ?: ""
+                }
+            }
+            .distinctBy { it["name"]?.lowercase() } // Remove case-insensitive duplicates
+            .sortedByDescending { it["stationcount"]?.toIntOrNull() ?: 0 } // Sort by popularity
     }
 
     private fun getStationsByCountry(countryName: String): Flow<List<RadioStation>> {
@@ -203,8 +231,35 @@ class SearchViewModel @Inject constructor(
         _searchFilters.value = _searchFilters.value.copy(genre = genre)
     }
     
+    fun updateSortOrder(sortOrder: SortOrder) {
+        _searchFilters.value = _searchFilters.value.copy(sortOrder = sortOrder)
+    }
+    
     fun clearFilters() {
         _searchFilters.value = SearchFilters()
+    }
+
+    private fun applySorting(stations: List<RadioStation>, sortOrder: SortOrder): List<RadioStation> {
+        return when (sortOrder) {
+            SortOrder.MOST_LIKED -> stations.sortedByDescending { it.votes }
+            SortOrder.LEAST_LIKED -> stations.sortedBy { it.votes }
+            SortOrder.BITRATE_DESC -> stations.sortedByDescending { it.bitrate }
+            SortOrder.BITRATE_ASC -> stations.sortedBy { it.bitrate }
+            SortOrder.NAME_ASC -> {
+                // Sort alphabetically, putting stations that start with letters first
+                stations.sortedWith(compareBy(
+                    { !(it.name.firstOrNull()?.isLetter() ?: false) },  // false (letters) come before true (non-letters)
+                    { it.name.lowercase() }
+                ))
+            }
+            SortOrder.NAME_DESC -> {
+                // Sort reverse alphabetically, putting stations that start with letters first
+                stations.sortedWith(compareBy(
+                    { !(it.name.firstOrNull()?.isLetter() ?: false) },  // false (letters) come before true (non-letters)
+                    { it.name.lowercase() }
+                )).reversed()
+            }
+        }
     }
 
     fun togglePlayback(station: RadioStation) {
@@ -269,15 +324,22 @@ class SearchViewModel @Inject constructor(
                 val query = _searchQuery.value
                 val filters = _searchFilters.value
                 
+                // Get country code if country filter is set
+                val countryCode = if (filters.country != null) {
+                    val countryMap = _countries.value.find { it["name"] == filters.country }
+                    countryMap?.get("iso_3166_1")
+                } else null
+                
                 radioRepository.searchStations(
                     query = query,
-                    countryCode = filters.country,
+                    countryCode = countryCode,
                     language = filters.language,
                     genre = filters.genre,
                     offset = _currentOffset.value
                 ).collect { newStations ->
                     if (newStations.isNotEmpty()) {
-                        _searchResults.value = _searchResults.value + newStations
+                        val sortedNewStations = applySorting(newStations, filters.sortOrder)
+                        _searchResults.value = _searchResults.value + sortedNewStations
                         _currentOffset.value = _searchResults.value.size
                         _hasMoreResults.value = newStations.size >= 100
                     } else {

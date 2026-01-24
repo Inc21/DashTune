@@ -73,6 +73,9 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.2.1")
     implementation("androidx.media3:media3-session:1.2.1")
     
+    // Coroutines
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.7.3")
+    
     // Dependency Injection
     implementation("com.google.dagger:hilt-android:2.48")
     kapt("com.google.dagger:hilt-android-compiler:2.48")
