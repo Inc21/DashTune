@@ -13,6 +13,8 @@ data class RadioBrowserStation(
     val streamUrl: String,
     @Json(name = "favicon")
     val imageUrl: String = "",
+    @Json(name = "homepage")
+    val websiteUrl: String = "",
     @Json(name = "tags")
     val tags: String = "",
     @Json(name = "countrycode")
@@ -30,7 +32,9 @@ data class RadioBrowserStation(
         id = stationUuid,
         name = name,
         streamUrl = streamUrl,
-        imageUrl = imageUrl,
+        imageUrl = StationIconHelper.resolveImageUrl(imageUrl, websiteUrl),
+        originalImageUrl = StationIconHelper.normalizeImageUrl(imageUrl),
+        websiteUrl = StationIconHelper.normalizeWebsiteUrl(websiteUrl),
         country = countryCode.trim(),
         codec = codec.trim(),
         bitrate = bitrate,
@@ -39,4 +43,4 @@ data class RadioBrowserStation(
         votes = votes,
         isPlaying = false
     )
-} 
+}

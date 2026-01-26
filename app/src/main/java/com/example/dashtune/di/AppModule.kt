@@ -12,6 +12,7 @@ import com.example.dashtune.data.remote.RadioBrowserApi
 import com.example.dashtune.data.remote.RadioBrowserApiImpl
 import com.example.dashtune.data.remote.RetryableRadioBrowserService
 import com.example.dashtune.data.repository.RadioStationRepository
+import com.example.dashtune.playback.SleepTimerManager
 import com.example.dashtune.playback.StationValidator
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -71,7 +72,8 @@ object AppModule {
     .addMigrations(
         RadioDatabase.MIGRATION_1_2,
         RadioDatabase.MIGRATION_2_3,
-        RadioDatabase.MIGRATION_3_4
+        RadioDatabase.MIGRATION_3_4,
+        RadioDatabase.MIGRATION_4_5
     )
     .build()
 
@@ -103,4 +105,10 @@ object AppModule {
     ): StationValidator {
         return StationValidator(appContext, radioStationRepository)
     }
-} 
+
+    @Provides
+    @Singleton
+    fun provideSleepTimerManager(): SleepTimerManager {
+        return SleepTimerManager()
+    }
+}

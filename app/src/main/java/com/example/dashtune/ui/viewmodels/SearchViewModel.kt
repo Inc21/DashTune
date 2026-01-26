@@ -3,6 +3,8 @@ package com.example.dashtune.ui.viewmodels
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dashtune.data.model.RadioStation
+import com.example.dashtune.data.model.StationIconHelper
+
 import com.example.dashtune.data.repository.RadioRepository
 import com.example.dashtune.data.repository.RadioStationRepository
 import com.example.dashtune.playback.PlaybackManager
@@ -77,6 +79,42 @@ class SearchViewModel @Inject constructor(
     private val _savedStationIds = MutableStateFlow<Set<String>>(emptySet())
     val savedStationIds: StateFlow<Set<String>> = _savedStationIds.asStateFlow()
 
+    private fun parseStationCount(value: String?): Int {
+        val normalized = value?.replace(Regex("[^0-9]"), "").orEmpty()
+        return normalized.toIntOrNull() ?: 0
+    }
+
+    private fun normalizeName(value: String?): String {
+        return value?.trim()?.lowercase().orEmpty()
+    }
+
+    private fun findEntry(items: List<Map<String, String>>, name: String?): Map<String, String>? {
+        val target = normalizeName(name)
+        if (target.isBlank()) return null
+        return items.firstOrNull { normalizeName(it["name"]) == target }
+    }
+
+    private fun getTotalCount(filters: SearchFilters): Int? {
+        return when {
+            filters.country != null -> {
+                findEntry(_countries.value, filters.country)
+                    ?.get("stationcount")
+                    ?.let { parseStationCount(it) }
+            }
+            filters.language != null -> {
+                findEntry(_languages.value, filters.language)
+                    ?.get("stationcount")
+                    ?.let { parseStationCount(it) }
+            }
+            filters.genre != null -> {
+                findEntry(_genres.value, filters.genre)
+                    ?.get("stationcount")
+                    ?.let { parseStationCount(it) }
+            }
+            else -> null
+        }
+    }
+
     init {
         loadFilterOptions()
         
@@ -103,7 +141,7 @@ class SearchViewModel @Inject constructor(
                     when {
                         query.isBlank() && filters.country != null -> {
                             // Get stations by country - try using searchStations with countrycode parameter
-                            val countryMap = _countries.value.find { it["name"] == filters.country }
+                            val countryMap = findEntry(_countries.value, filters.country)
                             val countryCode = countryMap?.get("iso_3166_1")
                             if (countryCode != null) {
                                 radioRepository.searchStations(
@@ -154,9 +192,11 @@ class SearchViewModel @Inject constructor(
                 }
                 .catch { /* Handle error */ }
                 .collect { stations ->
+                    val totalCount = getTotalCount(_searchFilters.value)
                     _searchResults.value = applySorting(stations, _searchFilters.value.sortOrder)
                     // If we got 100 results, there might be more
-                    _hasMoreResults.value = stations.size >= 100
+                    _hasMoreResults.value = totalCount?.let { _currentOffset.value < it }
+                        ?: (stations.size >= 100)
                     _currentOffset.value = stations.size
                 }
         }
@@ -307,6 +347,86 @@ class SearchViewModel @Inject constructor(
         }
     }
 
+    fun updateStationIcon(station: RadioStation) {
+        viewModelScope.launch {
+            val isSaved = stationRepository.isStationSaved(station.id)
+            if (!isSaved) return@launch
+
+            val updatedStation = buildUpdatedIconStation(station) ?: return@launch
+            stationRepository.updateStation(updatedStation)
+        }
+    }
+
+    fun revertStationIcon(station: RadioStation) {
+        viewModelScope.launch {
+            val isSaved = stationRepository.isStationSaved(station.id)
+            if (!isSaved) return@launch
+
+            val resolved = refreshStationMetadata(station)
+            val originalImageUrl = station.originalImageUrl.ifBlank { resolved?.originalImageUrl.orEmpty() }
+            val websiteUrl = station.websiteUrl.ifBlank { resolved?.websiteUrl.orEmpty() }
+            val updatedStation = station.copy(
+                imageUrl = originalImageUrl,
+                originalImageUrl = originalImageUrl,
+                websiteUrl = websiteUrl,
+                isIconOverridden = false
+            )
+            stationRepository.updateStation(updatedStation)
+        }
+    }
+
+    // Track station awaiting image pick
+    private val _stationForImagePick = MutableStateFlow<RadioStation?>(null)
+    val stationForImagePick = _stationForImagePick.asStateFlow()
+
+    fun requestImagePick(station: RadioStation) {
+        viewModelScope.launch {
+            val isSaved = stationRepository.isStationSaved(station.id)
+            if (!isSaved) return@launch
+            _stationForImagePick.value = station
+        }
+    }
+
+    fun setCustomImage(imageUri: String) {
+        val station = _stationForImagePick.value ?: return
+        _stationForImagePick.value = null
+        
+        viewModelScope.launch {
+            val updatedStation = station.copy(
+                imageUrl = imageUri,
+                isIconOverridden = true
+            )
+            stationRepository.updateStation(updatedStation)
+        }
+    }
+
+    fun clearImagePickRequest() {
+        _stationForImagePick.value = null
+    }
+
+    private suspend fun buildUpdatedIconStation(station: RadioStation): RadioStation? {
+        val resolved = refreshStationMetadata(station)
+        val websiteUrl = station.websiteUrl.ifBlank { resolved?.websiteUrl.orEmpty() }
+        val originalImageUrl = station.originalImageUrl.ifBlank { resolved?.originalImageUrl.orEmpty() }
+        val faviconUrl = StationIconHelper.buildFaviconUrl(websiteUrl)
+        if (faviconUrl.isBlank()) return null
+
+        return station.copy(
+            imageUrl = faviconUrl,
+            originalImageUrl = originalImageUrl,
+            websiteUrl = websiteUrl,
+            isIconOverridden = true
+        )
+    }
+
+    private suspend fun refreshStationMetadata(station: RadioStation): RadioStation? {
+        return if (station.websiteUrl.isBlank() || station.originalImageUrl.isBlank()) {
+            radioRepository.getStationByUuid(station.id)
+        } else {
+            null
+        }
+    }
+
     fun isStationSaved(stationId: String): Flow<Boolean> = flow {
         emit(stationRepository.isStationSaved(stationId))
     }
@@ -323,10 +443,11 @@ class SearchViewModel @Inject constructor(
             try {
                 val query = _searchQuery.value
                 val filters = _searchFilters.value
-                
+                val totalCount = getTotalCount(filters)
+
                 // Get country code if country filter is set
                 val countryCode = if (filters.country != null) {
-                    val countryMap = _countries.value.find { it["name"] == filters.country }
+                    val countryMap = findEntry(_countries.value, filters.country)
                     countryMap?.get("iso_3166_1")
                 } else null
                 
@@ -341,7 +462,8 @@ class SearchViewModel @Inject constructor(
                         val sortedNewStations = applySorting(newStations, filters.sortOrder)
                         _searchResults.value = _searchResults.value + sortedNewStations
                         _currentOffset.value = _searchResults.value.size
-                        _hasMoreResults.value = newStations.size >= 100
+                        _hasMoreResults.value = totalCount?.let { _currentOffset.value < it }
+                            ?: (newStations.size >= 100)
                     } else {
                         _hasMoreResults.value = false
                     }

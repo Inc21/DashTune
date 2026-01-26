@@ -10,7 +10,7 @@ import com.example.dashtune.data.model.RadioStation
 
 @Database(
     entities = [RadioStation::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -45,6 +45,15 @@ abstract class RadioDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE radio_stations ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
                 // Add the votes column with 0 as default value
                 db.execSQL("ALTER TABLE radio_stations ADD COLUMN votes INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        
+        // Migration from version 4 to 5 (adding icon/website fields)
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE radio_stations ADD COLUMN originalImageUrl TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE radio_stations ADD COLUMN websiteUrl TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE radio_stations ADD COLUMN isIconOverridden INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

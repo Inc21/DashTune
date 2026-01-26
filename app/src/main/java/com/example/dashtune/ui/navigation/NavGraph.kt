@@ -6,6 +6,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.example.dashtune.ui.screens.HomeScreen
 import com.example.dashtune.ui.screens.SearchScreen
+import com.example.dashtune.ui.screens.SettingsScreen
 
 @Composable
 fun NavGraph(navController: NavHostController) {
@@ -17,6 +18,9 @@ fun NavGraph(navController: NavHostController) {
             HomeScreen(
                 onNavigateToSearch = {
                     navController.navigate(Screen.Search.route)
+                },
+                onNavigateToSettings = {
+                    navController.navigate(Screen.Settings.route)
                 }
             )
         }
@@ -28,10 +32,19 @@ fun NavGraph(navController: NavHostController) {
                 }
             )
         }
+        
+        composable(Screen.Settings.route) {
+            SettingsScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                }
+            )
+        }
     }
 }
 
 sealed class Screen(val route: String) {
     object Home : Screen("home")
     object Search : Screen("search")
-} 
+    object Settings : Screen("settings")
+}

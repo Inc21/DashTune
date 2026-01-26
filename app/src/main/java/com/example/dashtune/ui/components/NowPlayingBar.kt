@@ -5,6 +5,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
@@ -12,7 +13,9 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
+import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -29,6 +32,7 @@ fun NowPlayingBar(
     onPlayPauseClick: () -> Unit,
     onSaveClick: () -> Unit,
     onBarClick: () -> Unit,
+    onMetadataClick: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -39,9 +43,7 @@ fun NowPlayingBar(
     ) {
         station?.let {
             Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onBarClick() },
+                modifier = Modifier.fillMaxWidth(),
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 tonalElevation = 8.dp
             ) {
@@ -97,12 +99,23 @@ fun NowPlayingBar(
                                 metadata.first != null -> metadata.first!!
                                 else -> metadata.second!!
                             }
+                            val hasCompleteMetadata = metadata?.first != null && metadata.second != null
                             Text(
                                 text = metadataText,
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = if (hasCompleteMetadata && onMetadataClick != null) {
+                                    Modifier.clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = rememberRipple()
+                                    ) { 
+                                        onMetadataClick(metadata.first!!, metadata.second!!)
+                                    }
+                                } else {
+                                    Modifier
+                                }
                             )
                         } else if (station.country.isNotBlank()) {
                             Text(

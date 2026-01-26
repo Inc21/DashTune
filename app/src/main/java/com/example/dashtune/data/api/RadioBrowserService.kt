@@ -35,7 +35,7 @@ interface RadioBrowserService {
     @GET("json/languages")
     suspend fun getLanguages(): List<Map<String, String>>
     
-    @GET("json/tags")
+    @GET("json/tags?order=stationcount&reverse=true&limit=500")
     suspend fun getGenres(): List<Map<String, String>>
 
     @Headers(

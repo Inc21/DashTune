@@ -1,5 +1,8 @@
 package com.example.dashtune.ui.screens
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -12,19 +15,26 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.*
+import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 
 import com.example.dashtune.data.model.RadioStation
+import com.example.dashtune.R
+
 import com.example.dashtune.ui.components.NowPlayingBar
 import com.example.dashtune.ui.components.StationCard
 import com.example.dashtune.ui.components.StationImage
@@ -41,15 +51,14 @@ private fun CompactTopBar(
     isBuffering: Boolean,
     isSaved: Boolean,
     metadata: Pair<String?, String?>?,
+    logoSize: Dp,
     onPlayPauseClick: () -> Unit,
     onSaveClick: () -> Unit,
     onSearchClick: () -> Unit,
     menuExpanded: Boolean,
     onMenuExpandedChange: (Boolean) -> Unit,
-    onAboutClick: () -> Unit,
-    onDeveloperClick: () -> Unit,
-    onBuyCoffeeClick: () -> Unit,
-    onAudioLevelClick: () -> Unit
+    onSettingsClick: () -> Unit,
+    onMetadataClick: ((String, String) -> Unit)? = null
 ) {
 
     TopAppBar(
@@ -64,6 +73,11 @@ private fun CompactTopBar(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // DashTune branding
+                Image(
+                    painter = painterResource(id = R.drawable.dashtune),
+                    contentDescription = "DashTune logo",
+                    modifier = Modifier.size(logoSize)
+                )
                 Text(
                     text = "DashTune",
                     style = MaterialTheme.typography.titleLarge
@@ -114,12 +128,23 @@ private fun CompactTopBar(
                                 metadata.first != null -> metadata.first!!
                                 else -> metadata.second!!
                             }
+                            val hasCompleteMetadata = metadata?.first != null && metadata.second != null
                             Text(
                                 text = metadataText,
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = if (hasCompleteMetadata && onMetadataClick != null) {
+                                    Modifier.clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = rememberRipple()
+                                    ) { 
+                                        onMetadataClick(metadata.first!!, metadata.second!!)
+                                    }
+                                } else {
+                                    Modifier
+                                }
                             )
                         }
                     }
@@ -163,20 +188,12 @@ private fun CompactTopBar(
                     contentDescription = "Search stations"
                 )
             }
-            IconButton(onClick = { onMenuExpandedChange(true) }) {
+            IconButton(onClick = onSettingsClick) {
                 Icon(
                     imageVector = Icons.Default.MoreVert,
-                    contentDescription = "More options"
+                    contentDescription = "Settings"
                 )
             }
-            OverflowMenu(
-                expanded = menuExpanded,
-                onExpandedChange = onMenuExpandedChange,
-                onAboutClick = onAboutClick,
-                onDeveloperClick = onDeveloperClick,
-                onBuyCoffeeClick = onBuyCoffeeClick,
-                onAudioLevelClick = onAudioLevelClick
-            )
         }
     )
 }
@@ -185,42 +202,17 @@ private fun CompactTopBar(
 private fun OverflowMenu(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
-    onAboutClick: () -> Unit,
-    onDeveloperClick: () -> Unit,
-    onBuyCoffeeClick: () -> Unit,
-    onAudioLevelClick: () -> Unit
+    onSettingsClick: () -> Unit
 ) {
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = { onExpandedChange(false) }
     ) {
         DropdownMenuItem(
-            text = { Text("About DashTune") },
+            text = { Text("Settings & About") },
             onClick = {
                 onExpandedChange(false)
-                onAboutClick()
-            }
-        )
-        DropdownMenuItem(
-            text = { Text("About the Developer") },
-            onClick = {
-                onExpandedChange(false)
-                onDeveloperClick()
-            }
-        )
-        DropdownMenuItem(
-            text = { Text("Buy me a coffee") },
-            onClick = {
-                onExpandedChange(false)
-                onBuyCoffeeClick()
-            }
-        )
-        Divider()
-        DropdownMenuItem(
-            text = { Text("Audio leveling") },
-            onClick = {
-                onExpandedChange(false)
-                onAudioLevelClick()
+                onSettingsClick()
             }
         )
     }
@@ -230,7 +222,8 @@ private fun OverflowMenu(
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel(),
-    onNavigateToSearch: () -> Unit
+    onNavigateToSearch: () -> Unit,
+    onNavigateToSettings: () -> Unit
 ) {
     val savedStations by viewModel.savedStations.collectAsState()
     val currentStation by viewModel.currentStation.collectAsState()
@@ -244,15 +237,48 @@ fun HomeScreen(
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
     val context = LocalContext.current
     
+    val stationForImagePick by viewModel.stationForImagePick.collectAsState()
+    
     var stationToRemove by remember { mutableStateOf<RadioStation?>(null) }
     var menuExpanded by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showDeveloperDialog by remember { mutableStateOf(false) }
     var showAudioDialog by remember { mutableStateOf(false) }
 
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            context.contentResolver.takePersistableUriPermission(
+                it,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            viewModel.setCustomImage(it.toString())
+        } ?: viewModel.clearImagePickRequest()
+    }
+
+    LaunchedEffect(stationForImagePick) {
+        if (stationForImagePick != null) {
+            imagePickerLauncher.launch(arrayOf("image/*"))
+        }
+    }
+
     val openBuyCoffee = {
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://buymeacoffee.com/inc21"))
         context.startActivity(intent)
+    }
+
+    val openStationSite: (RadioStation) -> Unit = { station ->
+        if (station.websiteUrl.isNotBlank()) {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(station.websiteUrl))
+            context.startActivity(intent)
+        }
+    }
+
+    val logoSize = when {
+        configuration.screenWidthDp < 360 -> 22.dp
+        configuration.screenWidthDp < 480 -> 26.dp
+        else -> 30.dp
     }
 
     Scaffold(
@@ -269,6 +295,7 @@ fun HomeScreen(
                     isBuffering = isBuffering,
                     isSaved = isSaved,
                     metadata = currentMetadata,
+                    logoSize = logoSize,
                     onPlayPauseClick = {
                         currentStation?.let { viewModel.togglePlayback(it) }
                     },
@@ -284,10 +311,12 @@ fun HomeScreen(
                     onSearchClick = onNavigateToSearch,
                     menuExpanded = menuExpanded,
                     onMenuExpandedChange = { menuExpanded = it },
-                    onAboutClick = { showAboutDialog = true },
-                    onDeveloperClick = { showDeveloperDialog = true },
-                    onBuyCoffeeClick = openBuyCoffee,
-                    onAudioLevelClick = { showAudioDialog = true }
+                    onSettingsClick = onNavigateToSettings,
+                    onMetadataClick = { artist, title ->
+                        val query = "$artist $title"
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/$query"))
+                        context.startActivity(intent)
+                    }
                 )
             } else {
                 // Portrait: Standard top bar with DashTune and search
@@ -296,7 +325,19 @@ fun HomeScreen(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant,
                         titleContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     ),
-                    title = { Text("DashTune") },
+                    title = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.dashtune),
+                                contentDescription = "DashTune logo",
+                                modifier = Modifier.size(logoSize)
+                            )
+                            Text("DashTune")
+                        }
+                    },
                     actions = {
                         IconButton(onClick = onNavigateToSearch) {
                             Icon(
@@ -304,20 +345,12 @@ fun HomeScreen(
                                 contentDescription = "Search stations"
                             )
                         }
-                        IconButton(onClick = { menuExpanded = true }) {
+                        IconButton(onClick = onNavigateToSettings) {
                             Icon(
                                 imageVector = Icons.Default.MoreVert,
-                                contentDescription = "More options"
+                                contentDescription = "Settings"
                             )
                         }
-                        OverflowMenu(
-                            expanded = menuExpanded,
-                            onExpandedChange = { menuExpanded = it },
-                            onAboutClick = { showAboutDialog = true },
-                            onDeveloperClick = { showDeveloperDialog = true },
-                            onBuyCoffeeClick = openBuyCoffee,
-                            onAudioLevelClick = { showAudioDialog = true }
-                        )
                     }
                 )
             }
@@ -348,7 +381,12 @@ fun HomeScreen(
                                 viewModel.toggleSave(station)
                             }
                         },
-                        onBarClick = { viewModel.togglePlayback(station) }
+                        onBarClick = { },
+                        onMetadataClick = { artist, title ->
+                            val query = "$artist $title"
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/$query"))
+                            context.startActivity(intent)
+                        }
                     )
                 }
             }
@@ -414,7 +452,12 @@ fun HomeScreen(
                                 isSaved = true,
                                 onPlayClick = { viewModel.togglePlayback(station) },
                                 onSaveClick = { stationToRemove = station },
+                                onVisitSite = openStationSite,
+                                onUpdateIcon = { viewModel.updateStationIcon(it) },
+                                onRevertIcon = { viewModel.revertStationIcon(it) },
+                                onPickImage = { viewModel.requestImagePick(it) },
                                 enableCardClick = true,
+                                showExtendedInfo = true,
                                 stationNumber = stationIndex + 1,
                                 modifier = Modifier
                                     .detectReorderAfterLongPress(reorderableState)

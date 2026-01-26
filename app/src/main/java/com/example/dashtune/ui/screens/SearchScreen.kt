@@ -28,6 +28,73 @@ import com.example.dashtune.ui.viewmodels.SearchViewModel
 import com.example.dashtune.ui.viewmodels.SearchFilters
 import com.example.dashtune.ui.viewmodels.SortOrder
 import androidx.compose.material.icons.filled.ArrowDropDown
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.example.dashtune.data.model.StationTagHelper
+
+private fun parseStationCount(value: String?): Int {
+    val normalized = value?.replace(Regex("[^0-9]"), "").orEmpty()
+    return normalized.toIntOrNull() ?: 0
+}
+
+// Whitelist of valid content tags (genres, formats, themes)
+private val validContentTags = setOf(
+    // Music genres
+    "rock", "pop", "jazz", "blues", "classical", "country", "folk", "soul",
+    "funk", "disco", "metal", "punk", "reggae", "hip hop", "rap", "rnb",
+    "electronic", "techno", "house", "trance", "ambient", "chill", "lounge",
+    "dance", "edm", "dubstep", "drum and bass", "indie", "alternative",
+    "grunge", "emo", "hardcore", "progressive", "psychedelic", "acoustic",
+    "instrumental", "vocal", "opera", "symphony", "orchestra", "piano",
+    "guitar", "latin", "salsa", "merengue", "bachata", "cumbia", "tango",
+    "flamenco", "world", "african", "asian", "celtic", "irish", "german",
+    "french", "italian", "spanish", "brazilian", "caribbean", "tropical",
+    "oldies", "retro", "vintage", "classic rock", "soft rock", "hard rock",
+    "heavy metal", "death metal", "black metal", "thrash", "power metal",
+    "smooth jazz", "acid jazz", "fusion", "swing", "bebop", "big band",
+    "new age", "meditation", "relaxation", "sleep", "spa", "nature",
+    "easy listening", "adult contemporary", "love songs", "romantic",
+    "christmas", "holiday", "christian", "gospel", "religious", "spiritual",
+    "worship", "catholic", "islamic", "jewish", "buddhist",
+    "kids", "children", "family", "disney", "anime", "jpop", "kpop",
+    "bollywood", "hindi", "arabic", "turkish", "russian", "polish",
+    "ska", "rockabilly", "doo wop", "motown", "groove", "beats",
+    // Content types
+    "news", "talk", "sports", "comedy", "drama", "culture", "education",
+    "science", "technology", "business", "politics", "health", "lifestyle",
+    "food", "travel", "nature", "history", "documentary", "entertainment",
+    "variety", "community", "local", "college", "university", "public",
+    "npr", "bbc", "information", "weather", "traffic"
+)
+
+private fun cleanTagKey(value: String): String? {
+    val normalized = value.trim().lowercase()
+        .replace(Regex("[_-]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    // Only return if it's a known valid content tag
+    return if (normalized in validContentTags) normalized else null
+}
+
+private fun formatGenreLabel(value: String?): String {
+    val normalized = value
+        ?.trim()
+        ?.replace(Regex("[_-]+"), " ")
+        ?.replace(Regex("\\s+"), " ")
+        ?.lowercase()
+        ?: ""
+    return normalized
+        .split(" ")
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { word ->
+            word.replaceFirstChar { it.uppercase() }
+        }
+        .ifBlank { value?.trim().orEmpty() }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,8 +120,35 @@ fun SearchScreen(
     val countries by viewModel.countries.collectAsState()
     val languages by viewModel.languages.collectAsState()
     val genres by viewModel.genres.collectAsState()
+    val context = LocalContext.current
+    val stationForImagePick by viewModel.stationForImagePick.collectAsState()
     
-    val tabs = listOf("Search", "Countries", "Languages", "Genres")
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            context.contentResolver.takePersistableUriPermission(
+                it,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            viewModel.setCustomImage(it.toString())
+        } ?: viewModel.clearImagePickRequest()
+    }
+    
+    LaunchedEffect(stationForImagePick) {
+        if (stationForImagePick != null) {
+            imagePickerLauncher.launch(arrayOf("image/*"))
+        }
+    }
+    
+    val tabs = listOf("Search", "Countries", "Languages", "Tags")
+
+    val openStationSite: (RadioStation) -> Unit = { station ->
+        if (station.websiteUrl.isNotBlank()) {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(station.websiteUrl))
+            context.startActivity(intent)
+        }
+    }
     
     Scaffold(
         topBar = {
@@ -84,7 +178,14 @@ fun SearchScreen(
                 tabs.forEachIndexed { index, title ->
                     Tab(
                         selected = selectedTabIndex == index,
-                        onClick = { selectedTabIndex = index },
+                        onClick = {
+                            if (selectedTabIndex != index) {
+                                selectedTabIndex = index
+                                searchQuery = ""
+                                viewModel.searchStations("")
+                                viewModel.clearFilters()
+                            }
+                        },
                         text = { Text(title) }
                     )
                 }
@@ -112,7 +213,11 @@ fun SearchScreen(
                     onPlayClick = { viewModel.togglePlayback(it) },
                     onSaveClick = { viewModel.toggleSave(it) },
                     onClearError = { viewModel.clearErrorMessage() },
-                    onLoadMore = { viewModel.loadMoreStations() }
+                    onLoadMore = { viewModel.loadMoreStations() },
+                    onVisitSite = openStationSite,
+                    onUpdateIcon = { viewModel.updateStationIcon(it) },
+                    onRevertIcon = { viewModel.revertStationIcon(it) },
+                    onPickImage = { viewModel.requestImagePick(it) }
                 )
                 1 -> CountriesTab(
                     countries = countries,
@@ -132,7 +237,14 @@ fun SearchScreen(
                     onSortOrderChange = { viewModel.updateSortOrder(it) },
                     onPlayClick = { viewModel.togglePlayback(it) },
                     onSaveClick = { viewModel.toggleSave(it) },
-                    onClearSelection = { viewModel.clearFilters() }
+                    onClearSelection = { viewModel.clearFilters() },
+                    hasMoreResults = hasMoreResults,
+                    isLoadingMore = isLoadingMore,
+                    onLoadMore = { viewModel.loadMoreStations() },
+                    onVisitSite = openStationSite,
+                    onUpdateIcon = { viewModel.updateStationIcon(it) },
+                    onRevertIcon = { viewModel.revertStationIcon(it) },
+                    onPickImage = { viewModel.requestImagePick(it) }
                 )
                 2 -> LanguagesTab(
                     languages = languages,
@@ -150,12 +262,19 @@ fun SearchScreen(
                     onSortOrderChange = { viewModel.updateSortOrder(it) },
                     onPlayClick = { viewModel.togglePlayback(it) },
                     onSaveClick = { viewModel.toggleSave(it) },
-                    onClearSelection = { viewModel.clearFilters() }
+                    onClearSelection = { viewModel.clearFilters() },
+                    hasMoreResults = hasMoreResults,
+                    isLoadingMore = isLoadingMore,
+                    onLoadMore = { viewModel.loadMoreStations() },
+                    onVisitSite = openStationSite,
+                    onUpdateIcon = { viewModel.updateStationIcon(it) },
+                    onRevertIcon = { viewModel.revertStationIcon(it) },
+                    onPickImage = { viewModel.requestImagePick(it) }
                 )
-                3 -> GenresTab(
+                3 -> TagsTab(
                     genres = genres,
                     onGenreSelected = { genre ->
-                        viewModel.updateGenreFilter(genre["name"])
+                        viewModel.updateGenreFilter(genre)
                     },
                     searchResults = searchResults,
                     currentStation = currentStation,
@@ -168,7 +287,14 @@ fun SearchScreen(
                     onSortOrderChange = { viewModel.updateSortOrder(it) },
                     onPlayClick = { viewModel.togglePlayback(it) },
                     onSaveClick = { viewModel.toggleSave(it) },
-                    onClearSelection = { viewModel.clearFilters() }
+                    onClearSelection = { viewModel.clearFilters() },
+                    hasMoreResults = hasMoreResults,
+                    isLoadingMore = isLoadingMore,
+                    onLoadMore = { viewModel.loadMoreStations() },
+                    onVisitSite = openStationSite,
+                    onUpdateIcon = { viewModel.updateStationIcon(it) },
+                    onRevertIcon = { viewModel.revertStationIcon(it) },
+                    onPickImage = { viewModel.requestImagePick(it) }
                 )
             }
         }
@@ -193,7 +319,11 @@ fun SearchTab(
     onPlayClick: (RadioStation) -> Unit,
     onSaveClick: (RadioStation) -> Unit,
     onClearError: () -> Unit,
-    onLoadMore: () -> Unit
+    onLoadMore: () -> Unit,
+    onVisitSite: (RadioStation) -> Unit,
+    onUpdateIcon: (RadioStation) -> Unit,
+    onRevertIcon: (RadioStation) -> Unit,
+    onPickImage: (RadioStation) -> Unit
 ) {
     var showSortMenu by remember { mutableStateOf(false) }
     var showInfoTip by remember { mutableStateOf(true) }
@@ -333,32 +463,16 @@ fun SearchTab(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.Top
                             ) {
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    horizontalArrangement = Arrangement.Start,
-                                    verticalAlignment = Alignment.Top
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Info,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Tip: Station listings may not always be accurate. Try searching by name if browsing doesn't find what you need.",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                                IconButton(
-                                    onClick = { showInfoTip = false },
+                                Icon(
+                                    imageVector = Icons.Default.Info,
+                                    contentDescription = null,
                                     modifier = Modifier.size(20.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Dismiss tip",
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Tip: Station listings may not always be accurate. Try searching by name if browsing doesn't find what you need.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
                             }
                         }
                     }
@@ -377,32 +491,33 @@ fun SearchTab(
                         isSaved = isSaved,
                         onPlayClick = { onPlayClick(station) },
                         onSaveClick = { onSaveClick(station) },
+                        allowIconActions = isSaved,
+                        onVisitSite = onVisitSite,
+                        onUpdateIcon = onUpdateIcon,
+                        onRevertIcon = onRevertIcon,
+                        onPickImage = onPickImage,
                         enableCardClick = true,
-                        showExtendedInfo = true
+                        showExtendedInfo = true,
+                        showBadgesInCard = true
                     )
+                }
+                
+                if (hasMoreResults) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = onLoadMore,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            enabled = !isLoadingMore
+                        ) {
+                            Text(if (isLoadingMore) "Loading..." else "Load More")
+                        }
+                    }
                 }
             }
             
-            // Load More button
-            if (hasMoreResults) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(
-                    onClick = onLoadMore,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp),
-                    enabled = !isLoadingMore
-                ) {
-                    if (isLoadingMore) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text(if (isLoadingMore) "Loading..." else "Load More")
-                }
-            }
         }
     }
 }
@@ -422,7 +537,14 @@ fun CountriesTab(
     onSortOrderChange: (SortOrder) -> Unit,
     onPlayClick: (RadioStation) -> Unit,
     onSaveClick: (RadioStation) -> Unit,
-    onClearSelection: () -> Unit
+    onClearSelection: () -> Unit,
+    hasMoreResults: Boolean,
+    isLoadingMore: Boolean,
+    onLoadMore: () -> Unit,
+    onVisitSite: (RadioStation) -> Unit,
+    onUpdateIcon: (RadioStation) -> Unit,
+    onRevertIcon: (RadioStation) -> Unit,
+    onPickImage: (RadioStation) -> Unit
 ) {
     var countrySearchQuery by remember { mutableStateOf("") }
     var showSortMenu by remember { mutableStateOf(false) }
@@ -435,6 +557,13 @@ fun CountriesTab(
         Spacer(modifier = Modifier.height(16.dp))
         
         if (currentFilters.country != null) {
+            val totalStations = countries
+                .firstOrNull { it["name"] == currentFilters.country }
+                ?.get("stationcount")
+                ?.let { parseStationCount(it) }
+                ?: searchResults.size
+            val showLoadMore = searchResults.isNotEmpty() &&
+                (hasMoreResults || totalStations > searchResults.size)
             // Show stations for selected country
             Row(
                 modifier = Modifier
@@ -444,24 +573,23 @@ fun CountriesTab(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${currentFilters.country} (${searchResults.size})",
+                    text = "${currentFilters.country} (${totalStations})",
                     style = MaterialTheme.typography.titleLarge
                 )
                 TextButton(onClick = onClearSelection) {
                     Text("Back to Countries")
                 }
             }
-            
-            Box(modifier = Modifier.fillMaxWidth()) {
-                SearchBar(
-                    query = "",
-                    onQueryChange = {},
-                    placeholder = "Sort stations...",
-                    modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = Icons.Default.Sort,
-                    onTrailingIconClick = { showSortMenu = true }
-                )
-                
+
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "Sort", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(onClick = { showSortMenu = true }) {
+                        Icon(imageVector = Icons.Default.Sort, contentDescription = "Sort")
+                    }
+                }
+
                 DropdownMenu(
                     expanded = showSortMenu,
                     onDismissRequest = { showSortMenu = false }
@@ -532,11 +660,33 @@ fun CountriesTab(
                         isSaved = isSaved,
                         onPlayClick = { onPlayClick(station) },
                         onSaveClick = { onSaveClick(station) },
+                        allowIconActions = isSaved,
+                        onVisitSite = onVisitSite,
+                        onUpdateIcon = onUpdateIcon,
+                        onRevertIcon = onRevertIcon,
+                        onPickImage = onPickImage,
                         enableCardClick = true,
-                        showExtendedInfo = true
+                        showExtendedInfo = true,
+                        showBadgesInCard = true
                     )
                 }
+
+                if (showLoadMore) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = onLoadMore,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            enabled = !isLoadingMore
+                        ) {
+                            Text(if (isLoadingMore) "Loading..." else "Load More")
+                        }
+                    }
+                }
             }
+
         } else {
             // Show list of countries
             Text(
@@ -611,7 +761,14 @@ fun LanguagesTab(
     onSortOrderChange: (SortOrder) -> Unit,
     onPlayClick: (RadioStation) -> Unit,
     onSaveClick: (RadioStation) -> Unit,
-    onClearSelection: () -> Unit
+    onClearSelection: () -> Unit,
+    hasMoreResults: Boolean,
+    isLoadingMore: Boolean,
+    onLoadMore: () -> Unit,
+    onVisitSite: (RadioStation) -> Unit,
+    onUpdateIcon: (RadioStation) -> Unit,
+    onRevertIcon: (RadioStation) -> Unit,
+    onPickImage: (RadioStation) -> Unit
 ) {
     var languageSearchQuery by remember { mutableStateOf("") }
     var showSortMenu by remember { mutableStateOf(false) }
@@ -624,6 +781,13 @@ fun LanguagesTab(
         Spacer(modifier = Modifier.height(16.dp))
         
         if (currentFilters.language != null) {
+            val totalStations = languages
+                .firstOrNull { it["name"] == currentFilters.language }
+                ?.get("stationcount")
+                ?.let { parseStationCount(it) }
+                ?: searchResults.size
+            val showLoadMore = searchResults.isNotEmpty() &&
+                (hasMoreResults || totalStations > searchResults.size)
             // Show stations for selected language
             Row(
                 modifier = Modifier
@@ -633,24 +797,23 @@ fun LanguagesTab(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${currentFilters.language} (${searchResults.size})",
+                    text = "${currentFilters.language} (${totalStations})",
                     style = MaterialTheme.typography.titleLarge
                 )
                 TextButton(onClick = onClearSelection) {
                     Text("Back to Languages")
                 }
             }
-            
-            Box(modifier = Modifier.fillMaxWidth()) {
-                SearchBar(
-                    query = "",
-                    onQueryChange = {},
-                    placeholder = "Sort stations...",
-                    modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = Icons.Default.Sort,
-                    onTrailingIconClick = { showSortMenu = true }
-                )
-                
+
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "Sort", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(onClick = { showSortMenu = true }) {
+                        Icon(imageVector = Icons.Default.Sort, contentDescription = "Sort")
+                    }
+                }
+
                 DropdownMenu(
                     expanded = showSortMenu,
                     onDismissRequest = { showSortMenu = false }
@@ -721,9 +884,30 @@ fun LanguagesTab(
                         isSaved = isSaved,
                         onPlayClick = { onPlayClick(station) },
                         onSaveClick = { onSaveClick(station) },
+                        allowIconActions = isSaved,
+                        onVisitSite = onVisitSite,
+                        onUpdateIcon = onUpdateIcon,
+                        onRevertIcon = onRevertIcon,
+                        onPickImage = onPickImage,
                         enableCardClick = true,
-                        showExtendedInfo = true
+                        showExtendedInfo = true,
+                        showBadgesInCard = true
                     )
+                }
+
+                if (showLoadMore) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = onLoadMore,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            enabled = !isLoadingMore
+                        ) {
+                            Text(if (isLoadingMore) "Loading..." else "Load More")
+                        }
+                    }
                 }
             }
         } else {
@@ -786,9 +970,9 @@ fun LanguagesTab(
 }
 
 @Composable
-fun GenresTab(
+fun TagsTab(
     genres: List<Map<String, String>>,
-    onGenreSelected: (Map<String, String>) -> Unit,
+    onGenreSelected: (String) -> Unit,
     searchResults: List<RadioStation>,
     currentStation: RadioStation?,
     isPlaying: Boolean,
@@ -800,19 +984,45 @@ fun GenresTab(
     onSortOrderChange: (SortOrder) -> Unit,
     onPlayClick: (RadioStation) -> Unit,
     onSaveClick: (RadioStation) -> Unit,
-    onClearSelection: () -> Unit
+    onClearSelection: () -> Unit,
+    hasMoreResults: Boolean,
+    isLoadingMore: Boolean,
+    onLoadMore: () -> Unit,
+    onVisitSite: (RadioStation) -> Unit,
+    onUpdateIcon: (RadioStation) -> Unit,
+    onRevertIcon: (RadioStation) -> Unit,
+    onPickImage: (RadioStation) -> Unit
 ) {
     var genreSearchQuery by remember { mutableStateOf("") }
     var showSortMenu by remember { mutableStateOf(false) }
-    
+
+    val aggregatedGenres = remember(genres) {
+        val totals = mutableMapOf<String, Int>()
+        genres.forEach { genre ->
+            val rawName = genre["name"].orEmpty()
+            val stationCount = genre["stationcount"]?.let { parseStationCount(it) } ?: 0
+            if (stationCount <= 0) return@forEach
+            val cleaned = cleanTagKey(rawName)
+            if (cleaned != null) {
+                totals[cleaned] = (totals[cleaned] ?: 0) + stationCount
+            }
+        }
+        totals
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 16.dp)
     ) {
         Spacer(modifier = Modifier.height(16.dp))
-        
+
         if (currentFilters.genre != null) {
+            val displayGenre = formatGenreLabel(currentFilters.genre)
+            val totalStations = aggregatedGenres[currentFilters.genre] ?: searchResults.size
+
+            val showLoadMore = searchResults.isNotEmpty() &&
+                (hasMoreResults || totalStations > searchResults.size)
             // Show stations for selected genre
             Row(
                 modifier = Modifier
@@ -822,24 +1032,23 @@ fun GenresTab(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${currentFilters.genre} (${searchResults.size})",
+                    text = "${displayGenre} (${totalStations})",
                     style = MaterialTheme.typography.titleLarge
                 )
                 TextButton(onClick = onClearSelection) {
-                    Text("Back to Genres")
+                    Text("Back to Tags")
                 }
             }
-            
-            Box(modifier = Modifier.fillMaxWidth()) {
-                SearchBar(
-                    query = "",
-                    onQueryChange = {},
-                    placeholder = "Sort stations...",
-                    modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = Icons.Default.Sort,
-                    onTrailingIconClick = { showSortMenu = true }
-                )
-                
+
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "Sort", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(onClick = { showSortMenu = true }) {
+                        Icon(imageVector = Icons.Default.Sort, contentDescription = "Sort")
+                    }
+                }
+
                 DropdownMenu(
                     expanded = showSortMenu,
                     onDismissRequest = { showSortMenu = false }
@@ -888,9 +1097,9 @@ fun GenresTab(
                     )
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(16.dp))
-            
+
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 160.dp),
                 contentPadding = PaddingValues(vertical = 8.dp),
@@ -902,7 +1111,7 @@ fun GenresTab(
                     val isValidating = validatingStationId == station.id
                     val isCurrentlyBuffering = currentStation?.id == station.id && isBuffering
                     val isSaved = savedStationIds.contains(station.id)
-                    
+
                     StationCard(
                         station = station,
                         isPlaying = isCurrentlyPlaying,
@@ -910,45 +1119,74 @@ fun GenresTab(
                         isSaved = isSaved,
                         onPlayClick = { onPlayClick(station) },
                         onSaveClick = { onSaveClick(station) },
+                        allowIconActions = isSaved,
+                        onVisitSite = onVisitSite,
+                        onUpdateIcon = onUpdateIcon,
+                        onRevertIcon = onRevertIcon,
+                        onPickImage = onPickImage,
                         enableCardClick = true,
-                        showExtendedInfo = true
+                        showExtendedInfo = true,
+                        showBadgesInCard = true
                     )
+                }
+
+                if (showLoadMore) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = onLoadMore,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            enabled = !isLoadingMore
+                        ) {
+                            Text(if (isLoadingMore) "Loading..." else "Load More")
+                        }
+                    }
                 }
             }
         } else {
             // Show list of genres
             Text(
-                text = "Select a Genre",
+                text = "Select a Tag",
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
-            
+
             // Search bar for filtering genres
             SearchBar(
                 query = genreSearchQuery,
                 onQueryChange = { genreSearchQuery = it },
-                placeholder = "Search for genres...",
+                placeholder = "Search for tags...",
                 modifier = Modifier.fillMaxWidth()
             )
-            
+
             Spacer(modifier = Modifier.height(16.dp))
-            
-            val filteredGenres = if (genreSearchQuery.isBlank()) {
-                genres.sortedBy { it["name"] }
-            } else {
-                genres.filter { 
-                    it["name"]?.contains(genreSearchQuery, ignoreCase = true) == true 
-                }.sortedBy { it["name"] }
-            }
-            
+
+            val filteredGenres = aggregatedGenres
+                .mapNotNull { (label, count) ->
+                    if (count < 2) return@mapNotNull null
+                    label to count
+                }
+                .let { entries ->
+                    val filtered = if (genreSearchQuery.isBlank()) {
+                        entries
+                    } else {
+                        entries.filter { (label, _) ->
+                            label.contains(genreSearchQuery, ignoreCase = true)
+                        }
+                    }
+                    filtered.sortedBy { it.first }
+                }
+
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(filteredGenres) { genre ->
+                items(filteredGenres) { (label, count) ->
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onGenreSelected(genre) }
+                            .clickable { onGenreSelected(label) }
                     ) {
                         Row(
                             modifier = Modifier
@@ -958,11 +1196,12 @@ fun GenresTab(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = genre["name"] ?: "",
+                                text = formatGenreLabel(label),
                                 style = MaterialTheme.typography.bodyLarge
                             )
+
                             Text(
-                                text = "${genre["stationcount"] ?: "0"} stations",
+                                text = "$count stations",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                             )

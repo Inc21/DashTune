@@ -23,6 +23,12 @@ data class RadioStation(
     @Json(name = "imageUrl")
     val imageUrl: String = "",
     
+    @Json(name = "originalImageUrl")
+    val originalImageUrl: String = "",
+    
+    @Json(name = "websiteUrl")
+    val websiteUrl: String = "",
+    
     @Json(name = "country")
     val country: String = "",
     
@@ -41,6 +47,9 @@ data class RadioStation(
     @Json(name = "votes")
     val votes: Int = 0,
     
+    @Json(name = "isIconOverridden")
+    val isIconOverridden: Boolean = false,
+    
     @Ignore
     @Transient
     var isPlaying: Boolean = false,
@@ -52,8 +61,8 @@ data class RadioStation(
     var position: Int = 0
 ) {
     // Secondary constructor for Room
-    constructor(id: String, name: String, streamUrl: String, imageUrl: String, country: String = "", codec: String = "", bitrate: Int = 0, language: String = "", tags: List<String> = emptyList(), votes: Int = 0) : 
-        this(id, name, streamUrl, imageUrl, country, codec, bitrate, language, tags, votes, false, StationStatus.UNKNOWN, 0)
+    constructor(id: String, name: String, streamUrl: String, imageUrl: String, originalImageUrl: String, websiteUrl: String, country: String = "", codec: String = "", bitrate: Int = 0, language: String = "", tags: List<String> = emptyList(), votes: Int = 0, isIconOverridden: Boolean = false, position: Int = 0) : 
+        this(id, name, streamUrl, imageUrl, originalImageUrl, websiteUrl, country, codec, bitrate, language, tags, votes, isIconOverridden, false, StationStatus.UNKNOWN, position)
         
     val isLikelyWorkingStation: Boolean
         get() = streamUrl.isNotBlank() && 
