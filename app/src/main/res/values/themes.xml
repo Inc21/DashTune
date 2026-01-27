@@ -2,4 +2,10 @@
 <resources>
 
     <style name="Theme.RadioApp" parent="android:Theme.Material.Light.NoActionBar" />
+    
+    <!-- AppCompat theme for CropImageActivity -->
+    <style name="Theme.RadioApp.AppCompat" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorAccent">@color/app_blue</item>
+        <item name="android:colorButtonNormal">@color/app_blue</item>
+    </style>
 </resources>

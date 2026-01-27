@@ -4,17 +4,20 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dashtune.data.model.RadioStation
 import com.example.dashtune.data.model.StationIconHelper
-
+import com.example.dashtune.data.model.StationStatus
 import com.example.dashtune.data.repository.RadioRepository
 import com.example.dashtune.data.repository.RadioStationRepository
 import com.example.dashtune.playback.PlaybackManager
 import com.example.dashtune.playback.StationValidator
 import com.example.dashtune.playback.SleepTimerManager
-import com.example.dashtune.data.model.StationStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import android.app.Application
+import android.net.Uri
+import com.example.dashtune.util.ImageProcessor
+import kotlinx.coroutines.Dispatchers
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
@@ -22,7 +25,8 @@ class HomeViewModel @Inject constructor(
     private val stationRepository: RadioStationRepository,
     private val playbackManager: PlaybackManager,
     private val stationValidator: StationValidator,
-    private val sleepTimerManager: SleepTimerManager
+    private val sleepTimerManager: SleepTimerManager,
+    private val application: Application
 ) : ViewModel() {
     
     val savedStations: StateFlow<List<RadioStation>> = stationRepository.getSavedStations()
@@ -35,8 +39,12 @@ class HomeViewModel @Inject constructor(
     val isPlaying = playbackManager.isPlaying
     val currentStation = playbackManager.currentStation
     val isBuffering = playbackManager.isBuffering
+    val isLoadingStation = playbackManager.isLoadingStation
     val currentMetadata = playbackManager.currentMetadata
     val volumeMultiplier = playbackManager.volumeMultiplier
+    val openLinksInSpotify = playbackManager.openLinksInSpotify
+    val eqPreset = playbackManager.eqPreset
+    val playingStationId = playbackManager.playingStationId
     
     val isSleepTimerActive = sleepTimerManager.isTimerActive
     val sleepTimerRemainingMinutes = sleepTimerManager.remainingTimeMinutes
@@ -112,12 +120,24 @@ class HomeViewModel @Inject constructor(
         val station = _stationForImagePick.value ?: return
         _stationForImagePick.value = null
 
-        viewModelScope.launch {
-            val updatedStation = station.copy(
-                imageUrl = imageUri,
-                isIconOverridden = true
-            )
-            stationRepository.updateStation(updatedStation)
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = application.applicationContext
+            val processedPath = ImageProcessor.processForAndroidAuto(context, Uri.parse(imageUri))
+            
+            if (processedPath != null) {
+                val updatedStation = station.copy(
+                    imageUrl = processedPath,
+                    isIconOverridden = true
+                )
+                stationRepository.updateStation(updatedStation)
+            } else {
+                // Fallback to original URI if processing fails
+                val updatedStation = station.copy(
+                    imageUrl = imageUri,
+                    isIconOverridden = true
+                )
+                stationRepository.updateStation(updatedStation)
+            }
         }
     }
 
@@ -172,6 +192,14 @@ class HomeViewModel @Inject constructor(
 
     fun setVolumeMultiplier(value: Float) {
         playbackManager.setVolumeMultiplier(value)
+    }
+
+    fun setOpenLinksInSpotify(enabled: Boolean) {
+        playbackManager.setOpenLinksInSpotify(enabled)
+    }
+
+    fun setEqPreset(preset: String) {
+        playbackManager.setEqPreset(preset)
     }
     
     fun startSleepTimer(durationMinutes: Int) {

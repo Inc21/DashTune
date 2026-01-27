@@ -99,22 +99,24 @@ fun NowPlayingBar(
                                 metadata.first != null -> metadata.first!!
                                 else -> metadata.second!!
                             }
-                            val hasCompleteMetadata = metadata?.first != null && metadata.second != null
+                            val hasAnyMetadata = !metadata.first.isNullOrBlank() || !metadata.second.isNullOrBlank()
                             Text(
                                 text = metadataText,
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 color = MaterialTheme.colorScheme.primary,
-                                modifier = if (hasCompleteMetadata && onMetadataClick != null) {
-                                    Modifier.clickable(
+                                modifier = if (hasAnyMetadata && onMetadataClick != null) {
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = rememberRipple()
                                     ) { 
-                                        onMetadataClick(metadata.first!!, metadata.second!!)
+                                        onMetadataClick(metadata.first.orEmpty(), metadata.second.orEmpty())
                                     }
                                 } else {
-                                    Modifier
+                                    Modifier.fillMaxWidth()
                                 }
                             )
                         } else if (station.country.isNotBlank()) {

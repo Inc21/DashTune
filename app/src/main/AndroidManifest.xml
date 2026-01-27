@@ -57,7 +57,7 @@
                 android:name="androidx.media.browse.CONTENT_STYLE_SUPPORTED"
                 android:value="true" />
         </service>
-        
+
         <!-- Android Auto metadata -->
         <meta-data
             android:name="com.google.android.gms.car.application"

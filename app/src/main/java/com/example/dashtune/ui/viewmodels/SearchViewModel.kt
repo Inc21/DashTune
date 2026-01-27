@@ -4,17 +4,20 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dashtune.data.model.RadioStation
 import com.example.dashtune.data.model.StationIconHelper
-
+import com.example.dashtune.data.model.StationStatus
 import com.example.dashtune.data.repository.RadioRepository
 import com.example.dashtune.data.repository.RadioStationRepository
 import com.example.dashtune.playback.PlaybackManager
-import com.example.dashtune.data.model.StationStatus
 import com.example.dashtune.playback.StationValidator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import android.app.Application
+import android.net.Uri
+import com.example.dashtune.util.ImageProcessor
 import javax.inject.Inject
 
 enum class SortOrder {
@@ -39,7 +42,8 @@ class SearchViewModel @Inject constructor(
     private val radioRepository: RadioRepository,
     private val stationRepository: RadioStationRepository,
     private val playbackManager: PlaybackManager,
-    private val stationValidator: StationValidator
+    private val stationValidator: StationValidator,
+    private val application: Application
 ) : ViewModel() {
 
     private val _searchQuery = MutableStateFlow("")
@@ -68,6 +72,7 @@ class SearchViewModel @Inject constructor(
     val currentStation = playbackManager.currentStation
     val isPlaying = playbackManager.isPlaying
     val isBuffering = playbackManager.isBuffering
+    val isLoadingStation = playbackManager.isLoadingStation
 
     private val _validatingStationId = MutableStateFlow<String?>(null)
     val validatingStationId = _validatingStationId.asStateFlow()
@@ -391,11 +396,22 @@ class SearchViewModel @Inject constructor(
         val station = _stationForImagePick.value ?: return
         _stationForImagePick.value = null
         
-        viewModelScope.launch {
-            val updatedStation = station.copy(
-                imageUrl = imageUri,
-                isIconOverridden = true
-            )
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = application.applicationContext
+            val processedPath = ImageProcessor.processForAndroidAuto(context, Uri.parse(imageUri))
+            
+            val updatedStation = if (processedPath != null) {
+                station.copy(
+                    imageUrl = processedPath,
+                    isIconOverridden = true
+                )
+            } else {
+                // Fallback to original URI if processing fails
+                station.copy(
+                    imageUrl = imageUri,
+                    isIconOverridden = true
+                )
+            }
             stationRepository.updateStation(updatedStation)
         }
     }

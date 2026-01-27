@@ -24,6 +24,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.dashtune.data.model.RadioStation
 import com.example.dashtune.ui.components.SearchBar
 import com.example.dashtune.ui.components.StationCard
+import com.example.dashtune.ui.components.ImageCropper
 import com.example.dashtune.ui.viewmodels.SearchViewModel
 import com.example.dashtune.ui.viewmodels.SearchFilters
 import com.example.dashtune.ui.viewmodels.SortOrder
@@ -107,6 +108,7 @@ fun SearchScreen(
     val currentStation by viewModel.currentStation.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
     val isBuffering by viewModel.isBuffering.collectAsState()
+    val isLoadingStation by viewModel.isLoadingStation.collectAsState()
     val validatingStationId by viewModel.validatingStationId.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val currentFilters by viewModel.currentFilters.collectAsState()
@@ -123,6 +125,10 @@ fun SearchScreen(
     val context = LocalContext.current
     val stationForImagePick by viewModel.stationForImagePick.collectAsState()
     
+    var showImageCropper by remember { mutableStateOf(false) }
+    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    var croppedImageUri by remember { mutableStateOf<Uri?>(null) }
+    
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -131,13 +137,38 @@ fun SearchScreen(
                 it,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
-            viewModel.setCustomImage(it.toString())
+            selectedImageUri = it
+            showImageCropper = true
         } ?: viewModel.clearImagePickRequest()
     }
     
     LaunchedEffect(stationForImagePick) {
         if (stationForImagePick != null) {
             imagePickerLauncher.launch(arrayOf("image/*"))
+        }
+    }
+
+    LaunchedEffect(croppedImageUri) {
+        if (croppedImageUri != null) {
+            viewModel.setCustomImage(croppedImageUri.toString())
+            croppedImageUri = null
+            showImageCropper = false
+            selectedImageUri = null
+        }
+    }
+
+    if (showImageCropper && selectedImageUri != null) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            ImageCropper(
+                imageUri = selectedImageUri!!,
+                onCropComplete = { cropped: Uri ->
+                    croppedImageUri = cropped
+                },
+                onCropCancelled = {
+                    showImageCropper = false
+                    selectedImageUri = null
+                }
+            )
         }
     }
     
@@ -202,7 +233,7 @@ fun SearchScreen(
                     searchResults = searchResults,
                     currentStation = currentStation,
                     isPlaying = isPlaying,
-                    isBuffering = isBuffering,
+                    isBuffering = isLoadingStation,
                     validatingStationId = validatingStationId,
                     savedStationIds = savedStationIds,
                     errorMessage = errorMessage,
@@ -229,7 +260,7 @@ fun SearchScreen(
                     searchResults = searchResults,
                     currentStation = currentStation,
                     isPlaying = isPlaying,
-                    isBuffering = isBuffering,
+                    isBuffering = isLoadingStation,
                     validatingStationId = validatingStationId,
                     savedStationIds = savedStationIds,
                     currentFilters = currentFilters,
@@ -254,7 +285,7 @@ fun SearchScreen(
                     searchResults = searchResults,
                     currentStation = currentStation,
                     isPlaying = isPlaying,
-                    isBuffering = isBuffering,
+                    isBuffering = isLoadingStation,
                     validatingStationId = validatingStationId,
                     savedStationIds = savedStationIds,
                     currentFilters = currentFilters,
@@ -279,7 +310,7 @@ fun SearchScreen(
                     searchResults = searchResults,
                     currentStation = currentStation,
                     isPlaying = isPlaying,
-                    isBuffering = isBuffering,
+                    isBuffering = isLoadingStation,
                     validatingStationId = validatingStationId,
                     savedStationIds = savedStationIds,
                     currentFilters = currentFilters,
@@ -481,13 +512,13 @@ fun SearchTab(
                 items(searchResults) { station ->
                     val isCurrentlyPlaying = currentStation?.id == station.id && isPlaying
                     val isValidating = validatingStationId == station.id
-                    val isCurrentlyBuffering = currentStation?.id == station.id && isBuffering
+                    val isCurrentlyLoading = currentStation?.id == station.id && isBuffering
                     val isSaved = savedStationIds.contains(station.id)
                     
                     StationCard(
                         station = station,
                         isPlaying = isCurrentlyPlaying,
-                        isLoading = isValidating || isCurrentlyBuffering,
+                        isLoading = isValidating || isCurrentlyLoading,
                         isSaved = isSaved,
                         onPlayClick = { onPlayClick(station) },
                         onSaveClick = { onSaveClick(station) },
@@ -650,13 +681,13 @@ fun CountriesTab(
                 items(searchResults) { station ->
                     val isCurrentlyPlaying = currentStation?.id == station.id && isPlaying
                     val isValidating = validatingStationId == station.id
-                    val isCurrentlyBuffering = currentStation?.id == station.id && isBuffering
+                    val isCurrentlyLoading = currentStation?.id == station.id && isBuffering
                     val isSaved = savedStationIds.contains(station.id)
                     
                     StationCard(
                         station = station,
                         isPlaying = isCurrentlyPlaying,
-                        isLoading = isValidating || isCurrentlyBuffering,
+                        isLoading = isValidating || isCurrentlyLoading,
                         isSaved = isSaved,
                         onPlayClick = { onPlayClick(station) },
                         onSaveClick = { onSaveClick(station) },
@@ -874,13 +905,13 @@ fun LanguagesTab(
                 items(searchResults) { station ->
                     val isCurrentlyPlaying = currentStation?.id == station.id && isPlaying
                     val isValidating = validatingStationId == station.id
-                    val isCurrentlyBuffering = currentStation?.id == station.id && isBuffering
+                    val isCurrentlyLoading = currentStation?.id == station.id && isBuffering
                     val isSaved = savedStationIds.contains(station.id)
                     
                     StationCard(
                         station = station,
                         isPlaying = isCurrentlyPlaying,
-                        isLoading = isValidating || isCurrentlyBuffering,
+                        isLoading = isValidating || isCurrentlyLoading,
                         isSaved = isSaved,
                         onPlayClick = { onPlayClick(station) },
                         onSaveClick = { onSaveClick(station) },
@@ -1109,13 +1140,13 @@ fun TagsTab(
                 items(searchResults) { station ->
                     val isCurrentlyPlaying = currentStation?.id == station.id && isPlaying
                     val isValidating = validatingStationId == station.id
-                    val isCurrentlyBuffering = currentStation?.id == station.id && isBuffering
+                    val isCurrentlyLoading = currentStation?.id == station.id && isBuffering
                     val isSaved = savedStationIds.contains(station.id)
 
                     StationCard(
                         station = station,
                         isPlaying = isCurrentlyPlaying,
-                        isLoading = isValidating || isCurrentlyBuffering,
+                        isLoading = isValidating || isCurrentlyLoading,
                         isSaved = isSaved,
                         onPlayClick = { onPlayClick(station) },
                         onSaveClick = { onSaveClick(station) },

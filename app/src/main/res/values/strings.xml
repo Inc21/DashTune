@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">DashTune</string>
+    <string name="adjust_image">Adjust Image</string>
 </resources>

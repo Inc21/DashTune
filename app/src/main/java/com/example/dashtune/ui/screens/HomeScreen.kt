@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -39,6 +40,7 @@ import com.example.dashtune.ui.components.NowPlayingBar
 import com.example.dashtune.ui.components.StationCard
 import com.example.dashtune.ui.components.StationImage
 import com.example.dashtune.ui.components.AudioBarsAnimation
+import com.example.dashtune.ui.components.ImageCropper
 import com.example.dashtune.ui.viewmodels.HomeViewModel
 import androidx.compose.foundation.ExperimentalFoundationApi
 import org.burnoutcrew.reorderable.*
@@ -128,19 +130,19 @@ private fun CompactTopBar(
                                 metadata.first != null -> metadata.first!!
                                 else -> metadata.second!!
                             }
-                            val hasCompleteMetadata = metadata?.first != null && metadata.second != null
+                            val hasAnyMetadata = !metadata.first.isNullOrBlank() || !metadata.second.isNullOrBlank()
                             Text(
                                 text = metadataText,
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 color = MaterialTheme.colorScheme.primary,
-                                modifier = if (hasCompleteMetadata && onMetadataClick != null) {
+                                modifier = if (hasAnyMetadata && onMetadataClick != null) {
                                     Modifier.clickable(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = rememberRipple()
                                     ) { 
-                                        onMetadataClick(metadata.first!!, metadata.second!!)
+                                        onMetadataClick(metadata.first.orEmpty(), metadata.second.orEmpty())
                                     }
                                 } else {
                                     Modifier
@@ -229,9 +231,12 @@ fun HomeScreen(
     val currentStation by viewModel.currentStation.collectAsState()
     val isPlaying by viewModel.isPlaying.collectAsState()
     val isBuffering by viewModel.isBuffering.collectAsState()
+    val isLoadingStation by viewModel.isLoadingStation.collectAsState()
     val validatingStationId by viewModel.validatingStationId.collectAsState()
     val currentMetadata by viewModel.currentMetadata.collectAsState()
+    val playingStationId by viewModel.playingStationId.collectAsState()
     val volumeMultiplier by viewModel.volumeMultiplier.collectAsState()
+    val openLinksInSpotify by viewModel.openLinksInSpotify.collectAsState()
     
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
@@ -244,6 +249,9 @@ fun HomeScreen(
     var showAboutDialog by remember { mutableStateOf(false) }
     var showDeveloperDialog by remember { mutableStateOf(false) }
     var showAudioDialog by remember { mutableStateOf(false) }
+    var showImageCropper by remember { mutableStateOf(false) }
+    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    var croppedImageUri by remember { mutableStateOf<Uri?>(null) }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -253,13 +261,38 @@ fun HomeScreen(
                 it,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
-            viewModel.setCustomImage(it.toString())
+            selectedImageUri = it
+            showImageCropper = true
         } ?: viewModel.clearImagePickRequest()
     }
 
     LaunchedEffect(stationForImagePick) {
         if (stationForImagePick != null) {
             imagePickerLauncher.launch(arrayOf("image/*"))
+        }
+    }
+
+    LaunchedEffect(croppedImageUri) {
+        if (croppedImageUri != null) {
+            viewModel.setCustomImage(croppedImageUri.toString())
+            croppedImageUri = null
+            showImageCropper = false
+            selectedImageUri = null
+        }
+    }
+
+    if (showImageCropper && selectedImageUri != null) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            ImageCropper(
+                imageUri = selectedImageUri!!,
+                onCropComplete = { cropped: Uri ->
+                    croppedImageUri = cropped
+                },
+                onCropCancelled = {
+                    showImageCropper = false
+                    selectedImageUri = null
+                }
+            )
         }
     }
 
@@ -273,6 +306,31 @@ fun HomeScreen(
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(station.websiteUrl))
             context.startActivity(intent)
         }
+    }
+
+    val openMetadataLink: (String, String) -> Unit = openMetadataLink@{ artist, title ->
+        val query = "$artist $title".trim()
+        val encoded = Uri.encode(query)
+
+        if (openLinksInSpotify) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:$query")).apply {
+                    setPackage("com.spotify.music")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                return@openMetadataLink
+            } catch (_: ActivityNotFoundException) {
+                // Fall through to web search.
+            } catch (_: Exception) {
+                // Fall through to web search.
+            }
+        }
+
+        // When the setting is OFF, avoid open.spotify.com to prevent Android App Links from
+        // deep-linking into Spotify anyway.
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$encoded"))
+        context.startActivity(intent)
     }
 
     val logoSize = when {
@@ -312,10 +370,12 @@ fun HomeScreen(
                     menuExpanded = menuExpanded,
                     onMenuExpandedChange = { menuExpanded = it },
                     onSettingsClick = onNavigateToSettings,
-                    onMetadataClick = { artist, title ->
-                        val query = "$artist $title"
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/$query"))
-                        context.startActivity(intent)
+                    onMetadataClick = if (openLinksInSpotify) {
+                        { artist, title ->
+                            openMetadataLink(artist, title)
+                        }
+                    } else {
+                        null
                     }
                 )
             } else {
@@ -382,10 +442,12 @@ fun HomeScreen(
                             }
                         },
                         onBarClick = { },
-                        onMetadataClick = { artist, title ->
-                            val query = "$artist $title"
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://open.spotify.com/search/$query"))
-                            context.startActivity(intent)
+                        onMetadataClick = if (openLinksInSpotify) {
+                            { artist, title ->
+                                openMetadataLink(artist, title)
+                            }
+                        } else {
+                            null
                         }
                     )
                 }
@@ -439,16 +501,17 @@ fun HomeScreen(
                         items = savedStations,
                         key = { it.id }
                     ) { station ->
-                        val isCurrentlyPlaying = currentStation?.id == station.id && isPlaying
+                        val isCurrentlyPlaying = playingStationId == station.id
                         val isValidating = validatingStationId == station.id
-                        val isCurrentlyBuffering = currentStation?.id == station.id && isBuffering
+                        // Use atomic isLoadingStation to prevent flicker from separate state updates
+                        val isCurrentlyLoading = currentStation?.id == station.id && isLoadingStation
                         val stationIndex = savedStations.indexOf(station)
                         
                         ReorderableItem(reorderableState, key = station.id) { isDragging ->
                             StationCard(
                                 station = station,
                                 isPlaying = isCurrentlyPlaying,
-                                isLoading = isValidating || isCurrentlyBuffering,
+                                isLoading = isValidating || isCurrentlyLoading,
                                 isSaved = true,
                                 onPlayClick = { viewModel.togglePlayback(station) },
                                 onSaveClick = { stationToRemove = station },
@@ -533,7 +596,7 @@ fun HomeScreen(
                         Slider(
                             value = volumeMultiplier,
                             onValueChange = { viewModel.setVolumeMultiplier(it) },
-                            valueRange = 0.2f..1.0f
+                            valueRange = 0.05f..1.0f
                         )
                         Text("Level: ${(volumeMultiplier * 100).toInt()}%")
                     }

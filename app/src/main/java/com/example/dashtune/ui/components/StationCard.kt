@@ -296,32 +296,34 @@ fun StationCard(
                                     onVisitSite(station)
                                 }
                             )
-                            DropdownMenuItem(
-                                text = { Text("Choose image") },
-                                enabled = allowIconActions,
-                                onClick = {
-                                    menuExpanded = false
-                                    onPickImage(station)
+                            if (isSaved) {
+                                DropdownMenuItem(
+                                    text = { Text("Choose image") },
+                                    enabled = allowIconActions,
+                                    onClick = {
+                                        menuExpanded = false
+                                        onPickImage(station)
+                                    }
+                                )
+                                if (station.isIconOverridden) {
+                                    DropdownMenuItem(
+                                        text = { Text("Revert icon") },
+                                        enabled = allowIconActions,
+                                        onClick = {
+                                            menuExpanded = false
+                                            showRevertConfirmation = true
+                                        }
+                                    )
+                                } else {
+                                    DropdownMenuItem(
+                                        text = { Text("Fetch favicon") },
+                                        enabled = allowIconActions,
+                                        onClick = {
+                                            menuExpanded = false
+                                            onUpdateIcon(station)
+                                        }
+                                    )
                                 }
-                            )
-                            if (station.isIconOverridden) {
-                                DropdownMenuItem(
-                                    text = { Text("Revert icon") },
-                                    enabled = allowIconActions,
-                                    onClick = {
-                                        menuExpanded = false
-                                        showRevertConfirmation = true
-                                    }
-                                )
-                            } else {
-                                DropdownMenuItem(
-                                    text = { Text("Fetch favicon") },
-                                    enabled = allowIconActions,
-                                    onClick = {
-                                        menuExpanded = false
-                                        onUpdateIcon(station)
-                                    }
-                                )
                             }
                         }
                     }

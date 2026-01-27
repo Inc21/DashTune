@@ -256,7 +256,7 @@ class RadioPlayerService : Service() {
     }
 
     fun setVolumeMultiplier(value: Float) {
-        volumeMultiplier = value.coerceIn(0.2f, 1.0f)
+        volumeMultiplier = value.coerceIn(0.05f, 1.0f)
         player.volume = volumeMultiplier
         Log.d(TAG, "Volume multiplier set to $volumeMultiplier")
     }
