@@ -84,11 +84,6 @@ class PlaybackManager @Inject constructor(
     )
     val openLinksInSpotify: StateFlow<Boolean> = _openLinksInSpotify.asStateFlow()
 
-    private val _eqPreset = MutableStateFlow(
-        prefs.getString(KEY_EQ_PRESET, DEFAULT_EQ_PRESET).orEmpty().ifBlank { DEFAULT_EQ_PRESET }
-    )
-    val eqPreset: StateFlow<String> = _eqPreset.asStateFlow()
-
     private val sessionToken = SessionToken(
         context,
         android.content.ComponentName(context, DashTuneMediaLibraryService::class.java)
@@ -173,8 +168,17 @@ class PlaybackManager @Inject constructor(
             }
 
             override fun onMediaMetadataChanged(mediaMetadata: androidx.media3.common.MediaMetadata) {
-                val title = mediaMetadata.title?.toString()
-                val artist = mediaMetadata.artist?.toString()
+                // Read stream metadata from extras (not from standard fields, which are reserved for AA)
+                val extras = mediaMetadata.extras
+                val title = extras?.getString("stream_song_title")
+                val artist = extras?.getString("stream_song_artist")
+                val allKeys = extras?.keySet()?.joinToString(", ") ?: "none"
+                Log.d(TAG, "PlaybackManager.onMediaMetadataChanged: title=$title, artist=$artist, allKeys=[$allKeys]")
+                if (title != null || artist != null) {
+                    Log.d(TAG, "  -> Found metadata, setting to Pair($title, $artist)")
+                } else {
+                    Log.d(TAG, "  -> No metadata found in extras")
+                }
                 _currentMetadata.value = Pair(title, artist)
             }
 
@@ -187,6 +191,9 @@ class PlaybackManager @Inject constructor(
                     else -> "UNKNOWN($reason)"
                 }
                 Log.d(TAG, "onMediaItemTransition: reason=$reasonName, mediaId=${mediaItem?.mediaId}, pendingStationId=$pendingStationId")
+                
+                // Clear metadata when switching stations
+                _currentMetadata.value = null
                 
                 // Keep currentStation in sync with queue changes (next/prev from AA or phone)
                 val id = mediaItem?.mediaId?.removePrefix("station_") ?: return
@@ -295,12 +302,6 @@ class PlaybackManager @Inject constructor(
         prefs.edit().putBoolean(KEY_OPEN_LINKS_IN_SPOTIFY, enabled).apply()
     }
 
-    fun setEqPreset(preset: String) {
-        val normalized = preset.trim().ifBlank { DEFAULT_EQ_PRESET }
-        _eqPreset.value = normalized
-        prefs.edit().putString(KEY_EQ_PRESET, normalized).apply()
-    }
-
     fun release() {
         try {
             controller?.release()
@@ -313,10 +314,8 @@ class PlaybackManager @Inject constructor(
         private const val PREFS_NAME = "dashtune_prefs"
         private const val KEY_VOLUME_MULTIPLIER = "volume_multiplier"
         private const val KEY_OPEN_LINKS_IN_SPOTIFY = "open_links_in_spotify"
-        private const val KEY_EQ_PRESET = "eq_preset"
         private const val DEFAULT_VOLUME_MULTIPLIER = 0.7f
         private const val DEFAULT_OPEN_LINKS_IN_SPOTIFY = false
-        private const val DEFAULT_EQ_PRESET = "Off"
         private const val MIN_VOLUME_MULTIPLIER = 0.05f
         private const val MAX_VOLUME_MULTIPLIER = 1.0f
     }

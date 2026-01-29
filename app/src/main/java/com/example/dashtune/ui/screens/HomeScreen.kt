@@ -427,6 +427,7 @@ fun HomeScreen(
                     shadowElevation = 8.dp,
                     color = MaterialTheme.colorScheme.surface
                 ) {
+                    val stationIndex = savedStations.indexOf(station)
                     NowPlayingBar(
                         station = station,
                         isPlaying = isPlaying,
@@ -448,7 +449,8 @@ fun HomeScreen(
                             }
                         } else {
                             null
-                        }
+                        },
+                        stationNumber = if (stationIndex >= 0) stationIndex + 1 else null
                     )
                 }
             }

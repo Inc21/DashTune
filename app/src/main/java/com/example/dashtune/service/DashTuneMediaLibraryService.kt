@@ -5,13 +5,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.SharedPreferences
 import android.content.Intent
-import android.media.audiofx.Equalizer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
+import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -19,8 +20,11 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.TransferListener
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSession.MediaItemsWithStartPosition
 import androidx.media3.session.SessionResult
@@ -58,8 +62,6 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
     private var pausedByUserOrSystem: Boolean = false
 
     private lateinit var prefs: SharedPreferences
-    private var equalizer: Equalizer? = null
-    private var equalizerAudioSessionId: Int = 0
 
     private var volumeMultiplier: Float = 1.0f
 
@@ -68,11 +70,11 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
     private var fadeInTargetVolume: Float = 1.0f
     private var lastNonZeroPlayerVolume: Float = 1.0f
 
-    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == KEY_EQ_PRESET) {
-            applyEqPreset(prefs.getString(KEY_EQ_PRESET, DEFAULT_EQ_PRESET).orEmpty())
-        }
+    // Simple flag to handle Android Auto double-skips
+    private var lastAACommandTimeMs = 0L
+    private val AA_DEBOUNCE_MS = 800L
 
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == KEY_VOLUME_MULTIPLIER) {
             volumeMultiplier = prefs.getFloat(KEY_VOLUME_MULTIPLIER, DEFAULT_VOLUME_MULTIPLIER)
             if (::player.isInitialized) {
@@ -84,17 +86,34 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
         }
     }
 
+    private fun normalizeVoiceQuery(query: String?): String {
+        return query.orEmpty().trim().lowercase()
+    }
+
+    private fun parseStationNumberFromQuery(normalizedQuery: String): Int? {
+        val match = Regex("\\b(?:station|preset)\\s*(\\d{1,3})\\b").find(normalizedQuery) ?: return null
+        val n = match.groupValues.getOrNull(1)?.toIntOrNull() ?: return null
+        return n.takeIf { it > 0 }
+    }
+
     private fun armTransitionMute() {
-        // Mute as early as possible to avoid pops/clicks when switching between live streams.
-        // (The tear-down of the previous decoder/output can produce a short transient.)
+        // Mute the current stream and immediately apply the leveller to prevent the pop
+        // Only arm if not already pending to avoid double-muting
+        if (fadeInPending) {
+            Log.d(TAG, "armTransitionMute skipped: already pending")
+            return
+        }
+        
+        // Set flag immediately to prevent double-calls
         fadeInPending = true
         fadeInToken += 1
-
         fadeInTargetVolume = volumeMultiplier.coerceAtLeast(0f)
-        // Mute volume FIRST, then pause
+        
+        Log.d(TAG, "armTransitionMute called, setting volume immediately")
+        // Apply mute and leveller directly without posting to handler
         player.volume = 0f
-        player.playWhenReady = false
-        player.pause()
+        player.volume = fadeInTargetVolume
+        Log.d(TAG, "armTransitionMute done: volume now=${player.volume}, fadeInToken=$fadeInToken")
     }
 
     override fun onCreate() {
@@ -122,8 +141,6 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
 
             player.volume = volumeMultiplier
 
-            applyEqPreset(prefs.getString(KEY_EQ_PRESET, DEFAULT_EQ_PRESET).orEmpty())
-
             // Create MediaLibrarySession
             mediaLibrarySession = MediaLibrarySession.Builder(
                 this,
@@ -135,9 +152,27 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
                 ): MediaSession.ConnectionResult {
                     Log.d(TAG, "onConnect called from ${controller.packageName} (uid=${controller.uid})")
                     
-                    // Accept with default commands - simplest approach for Android Auto compatibility
-                    Log.d(TAG, "Accepting connection with AcceptedResultBuilder")
-                    return MediaSession.ConnectionResult.AcceptedResultBuilder(session).build()
+                    val availablePlayerCommands = Player.Commands.Builder()
+                        .addAll(
+                            Player.COMMAND_PLAY_PAUSE,
+                            Player.COMMAND_PREPARE,
+                            Player.COMMAND_STOP,
+                            Player.COMMAND_SEEK_TO_NEXT,
+                            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+                            Player.COMMAND_SEEK_TO_PREVIOUS,
+                            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+                            Player.COMMAND_SET_MEDIA_ITEM,
+                            Player.COMMAND_CHANGE_MEDIA_ITEMS,
+                            Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
+                            Player.COMMAND_GET_TIMELINE,
+                            Player.COMMAND_GET_METADATA
+                        )
+                        .build()
+                    
+                    Log.d(TAG, "Accepting connection with explicit next/prev commands")
+                    return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                        .setAvailablePlayerCommands(availablePlayerCommands)
+                        .build()
                 }
 
                 override fun onGetLibraryRoot(
@@ -247,12 +282,102 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
                     return future
                 }
 
+                override fun onSearch(
+                    session: MediaLibrarySession,
+                    browser: MediaSession.ControllerInfo,
+                    query: String,
+                    params: LibraryParams?
+                ): ListenableFuture<LibraryResult<Void>> {
+                    Log.d(TAG, "onSearch query='$query' caller=${browser.packageName}")
+
+                    serviceScope.launch {
+                        try {
+                            val stations = repository.getSavedStations().first()
+                            val normalized = normalizeVoiceQuery(query)
+                            val requestedNumber = parseStationNumberFromQuery(normalized)
+
+                            val resultCount = when {
+                                stations.isEmpty() -> 0
+                                requestedNumber != null -> if (stations.getOrNull(requestedNumber - 1) != null) 1 else 0
+                                normalized.isBlank() || normalized == "dashtune" || normalized.contains("dashtune") -> 1
+                                else -> stations.count { station ->
+                                    val name = station.name.trim()
+                                    name.isNotEmpty() && name.lowercase().contains(normalized)
+                                }
+                            }
+
+                            session.notifySearchResultChanged(browser, query, resultCount, params)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error in onSearch", e)
+                            session.notifySearchResultChanged(browser, query, 0, params)
+                        }
+                    }
+
+                    return Futures.immediateFuture(LibraryResult.ofVoid())
+                }
+
+                override fun onGetSearchResult(
+                    session: MediaLibrarySession,
+                    browser: MediaSession.ControllerInfo,
+                    query: String,
+                    page: Int,
+                    pageSize: Int,
+                    params: LibraryParams?
+                ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+                    Log.d(TAG, "onGetSearchResult query='$query' page=$page pageSize=$pageSize caller=${browser.packageName}")
+                    val future = com.google.common.util.concurrent.SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
+                    serviceScope.launch {
+                        try {
+                            val stations = repository.getSavedStations().first()
+                            if (stations.isEmpty()) {
+                                future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
+                                return@launch
+                            }
+
+                            val normalized = normalizeVoiceQuery(query)
+                            val requestedNumber = parseStationNumberFromQuery(normalized)
+
+                            val resultItems: List<MediaItem> = when {
+                                requestedNumber != null -> {
+                                    val index = requestedNumber - 1
+                                    val station = stations.getOrNull(index)
+                                    if (station != null) listOf(buildStationItem(station, requestedNumber)) else emptyList()
+                                }
+                                normalized.isBlank() || normalized == "dashtune" || normalized.contains("dashtune") -> {
+                                    val first = stations.first()
+                                    listOf(buildStationItem(first, 1))
+                                }
+                                else -> {
+                                    val matches = stations.mapIndexedNotNull { idx, station ->
+                                        val name = station.name.trim()
+                                        if (name.isNotEmpty() && name.lowercase().contains(normalized)) {
+                                            buildStationItem(station, idx + 1)
+                                        } else {
+                                            null
+                                        }
+                                    }
+                                    matches
+                                }
+                            }
+
+                            val start = (page * pageSize).coerceAtLeast(0)
+                            val end = (start + pageSize).coerceAtMost(resultItems.size)
+                            val paged = if (start in 0..end) resultItems.subList(start, end) else emptyList()
+                            future.set(LibraryResult.ofItemList(ImmutableList.copyOf(paged), params))
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error in onGetSearchResult", e)
+                            future.set(LibraryResult.ofError(LibraryResult.RESULT_ERROR_UNKNOWN))
+                        }
+                    }
+                    return future
+                }
+
                 override fun onGetItem(
                     session: MediaLibrarySession,
                     browser: MediaSession.ControllerInfo,
                     mediaId: String
                 ): ListenableFuture<LibraryResult<MediaItem>> {
-                    Log.d(TAG, "onGetItem mediaId=$mediaId")
+                    Log.d(TAG, "onGetItem mediaId=$mediaId caller=${browser.packageName}")
                     val future = com.google.common.util.concurrent.SettableFuture.create<LibraryResult<MediaItem>>()
                     serviceScope.launch {
                         try {
@@ -265,6 +390,7 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
                                     val index = stations.indexOf(station)
                                     val stationNumber = index + 1
                                     val item = buildStationItem(station, stationNumber)
+                                    Log.d(TAG, "onGetItem returning station: ${station.name} (index=$index, totalStations=${stations.size})")
                                     LibraryResult.ofItem(item, null)
                                 } else {
                                     LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
@@ -288,37 +414,68 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
                     startIndex: Int,
                     startPositionMs: Long
                 ): ListenableFuture<MediaItemsWithStartPosition> {
-                    Log.d(TAG, "onSetMediaItems called with ${mediaItems.size} items")
-                    val future = com.google.common.util.concurrent.SettableFuture.create<MediaItemsWithStartPosition>()
-                    serviceScope.launch {
+                    Log.d(TAG, "onSetMediaItems from ${controller.packageName}, items=${mediaItems.size}, startIndex=$startIndex")
+                    
+                    val safeIndex = startIndex.coerceIn(0, mediaItems.lastIndex.coerceAtLeast(0))
+                    
+                    // Build enriched items with full metadata synchronously
+                    val enrichedItems = runBlocking {
                         try {
-                            armTransitionMute()
-
-                            if (controller.packageName == applicationContext.packageName) {
-                                val resolvedIndex = startIndex.coerceIn(0, mediaItems.lastIndex.coerceAtLeast(0))
-                                future.set(MediaItemsWithStartPosition(mediaItems, resolvedIndex, startPositionMs))
-                                return@launch
-                            }
-
                             val stations = repository.getSavedStations().first()
-                            val items = buildStationItems(stations)
-                            val requested = mediaItems.getOrNull(startIndex) ?: mediaItems.firstOrNull()
-                            val requestedId = requested?.mediaId?.takeIf { it.isNotBlank() }
-                            val requestedUri = requested?.localConfiguration?.uri
-
-                            val resolvedIndex = when {
-                                requestedId != null -> items.indexOfFirst { it.mediaId == requestedId }
-                                requestedUri != null -> items.indexOfFirst { it.localConfiguration?.uri == requestedUri }
-                                else -> startIndex
-                            }.takeIf { it >= 0 } ?: startIndex.coerceIn(0, items.lastIndex.coerceAtLeast(0))
-
-                            future.set(MediaItemsWithStartPosition(items, resolvedIndex, startPositionMs))
+                            
+                            // If only 1 item is requested (AA clicking a station), load FULL playlist
+                            // so skip buttons can navigate through all stations
+                            if (mediaItems.size == 1 && controller.packageName == "com.google.android.projection.gearhead") {
+                                val requestedStationId = mediaItems[0].mediaId.removePrefix("station_")
+                                val requestedStation = stations.find { it.id == requestedStationId }
+                                
+                                if (requestedStation != null) {
+                                    val targetIndex = stations.indexOf(requestedStation)
+                                    val allStationItems = buildStationItems(stations)
+                                    Log.d(TAG, "AA requested 1 station, loading full playlist of ${allStationItems.size} stations, starting at index=$targetIndex")
+                                    return@runBlocking Pair(allStationItems, targetIndex)
+                                }
+                            }
+                            
+                            // Otherwise, enrich the provided items normally
+                            val enriched = mediaItems.map { item ->
+                                val stationId = item.mediaId.removePrefix("station_")
+                                val station = stations.find { it.id == stationId }
+                                
+                                if (station != null) {
+                                    val stationNumber = stations.indexOf(station) + 1
+                                    buildStationItem(station, stationNumber)
+                                } else {
+                                    item
+                                }
+                            }
+                            Pair(enriched, safeIndex)
                         } catch (e: Exception) {
-                            Log.e(TAG, "Error in onSetMediaItems", e)
-                            future.setException(e)
+                            Log.e(TAG, "Failed to enrich items", e)
+                            Pair(mediaItems.toList(), safeIndex)
                         }
                     }
-                    return future
+                    
+                    val (finalItems, finalIndex) = enrichedItems
+                    Log.d(TAG, "Enriched ${finalItems.size} items, applying to player at index=$finalIndex")
+                    
+                    // Manually apply items to player to ensure playback starts
+                    handler.post {
+                        try {
+                            player.stop()
+                            player.clearMediaItems()
+                            player.setMediaItems(finalItems)
+                            player.seekTo(finalIndex, 0)
+                            player.prepare()
+                            player.playWhenReady = true
+                            Log.d(TAG, "Player setup complete: index=$finalIndex, itemCount=${player.mediaItemCount}, playWhenReady=${player.playWhenReady}")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to apply items to player", e)
+                        }
+                    }
+                    
+                    // Return enriched items for Media3 compatibility
+                    return Futures.immediateFuture(MediaItemsWithStartPosition(finalItems, finalIndex, startPositionMs))
                 }
 
                 override fun onPlayerCommandRequest(
@@ -326,6 +483,97 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
                     controller: MediaSession.ControllerInfo,
                     playerCommand: Int
                 ): Int {
+                    // Handle navigation commands
+                    if (playerCommand == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ||
+                        playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM ||
+                        playerCommand == Player.COMMAND_SEEK_TO_NEXT ||
+                        playerCommand == Player.COMMAND_SEEK_TO_PREVIOUS
+                    ) {
+                        // Only apply debounce for Android Auto to fix double-skip
+                        if (controller.packageName == "com.google.android.projection.gearhead") {
+                            val now = SystemClock.uptimeMillis()
+                            if (now - lastAACommandTimeMs < AA_DEBOUNCE_MS) {
+                                Log.d(TAG, "BLOCKED duplicate Android Auto command")
+                                return SessionResult.RESULT_SUCCESS
+                            }
+                            lastAACommandTimeMs = now
+                        }
+                        
+                        // Original navigation behavior - works for both AA and phone
+                        var count = player.mediaItemCount
+                        if (count <= 0) {
+                            return SessionResult.RESULT_SUCCESS
+                        }
+                        
+                        // If only 1 station loaded, load full playlist before navigating
+                        if (count == 1) {
+                            Log.d(TAG, "Only 1 station in playlist, loading full playlist for navigation")
+                            try {
+                                val currentStationId = player.currentMediaItem?.mediaId?.removePrefix("station_")
+                                val stations = runBlocking { repository.getSavedStations().first() }
+                                val currentStation = stations.find { it.id == currentStationId }
+                                
+                                if (currentStation != null && stations.size > 1) {
+                                    val currentIndex = stations.indexOf(currentStation)
+                                    val allStationItems = buildStationItems(stations)
+                                    
+                                    player.stop()
+                                    player.clearMediaItems()
+                                    player.setMediaItems(allStationItems)
+                                    player.seekToDefaultPosition(currentIndex)
+                                    player.prepare()
+                                    player.playWhenReady = true
+                                    
+                                    count = player.mediaItemCount
+                                    Log.d(TAG, "Loaded full playlist: ${allStationItems.size} stations, current index=$currentIndex")
+                                } else {
+                                    Log.d(TAG, "Cannot expand playlist: station not found or only 1 station saved")
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to load full playlist", e)
+                            }
+                        }
+                        
+                        // Prepare for station change
+                        armTransitionMute()
+                        val direction = if (
+                            playerCommand == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM ||
+                            playerCommand == Player.COMMAND_SEEK_TO_NEXT
+                        ) 1 else -1
+                        
+                        // Get current state
+                        val wasPlayWhenReady = player.playWhenReady
+                        val index = player.currentMediaItemIndex
+                        
+                        // Calculate target index with wrap-around
+                        val targetIndex = if (direction > 0) {
+                            if (index >= count - 1) 0 else index + 1  // Wrap at end
+                        } else {
+                            if (index <= 0) count - 1 else index - 1  // Wrap at start
+                        }
+                        
+                        // Log and perform navigation
+                        Log.d(TAG, "Navigation: index=$index → $targetIndex (count=$count, from=${controller.packageName})")
+                        
+                        // Temporarily disable repeat mode to prevent auto-advance during seek
+                        val previousRepeatMode = player.repeatMode
+                        player.repeatMode = Player.REPEAT_MODE_OFF
+                        
+                        // Seek to target station
+                        player.seekToDefaultPosition(targetIndex)
+                        
+                        // Restore repeat mode after seek completes
+                        handler.postDelayed({
+                            player.repeatMode = previousRepeatMode
+                        }, 100)
+                        
+                        player.playWhenReady = wasPlayWhenReady
+                        
+                        // Return SUCCESS to indicate we've handled the command
+                        // DO NOT call super as it would process the skip again, causing double-skip
+                        return SessionResult.RESULT_SUCCESS
+                    }
+
                     // Track if we were paused by AA/car so we can rebuffer on resume.
                     // Some Media3 versions expose play/pause as a single COMMAND_PLAY_PAUSE.
                     if (playerCommand == Player.COMMAND_PLAY_PAUSE) {
@@ -346,6 +594,77 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
                     }
 
                     return super.onPlayerCommandRequest(session, controller, playerCommand)
+                }
+
+                override fun onMediaButtonEvent(
+                    session: MediaSession,
+                    controllerInfo: MediaSession.ControllerInfo,
+                    intent: Intent
+                ): Boolean {
+                    if (intent.action != Intent.ACTION_MEDIA_BUTTON) {
+                        return super.onMediaButtonEvent(session, controllerInfo, intent)
+                    }
+
+                    val keyEvent: KeyEvent? = if (Build.VERSION.SDK_INT >= 33) {
+                        intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+                    }
+
+                    if (keyEvent == null || keyEvent.action != KeyEvent.ACTION_DOWN) {
+                        return super.onMediaButtonEvent(session, controllerInfo, intent)
+                    }
+
+                    // Only apply debounce for Android Auto to fix double-skip
+                    if (controllerInfo.packageName == "com.google.android.projection.gearhead") {
+                        val now = SystemClock.uptimeMillis()
+                        if (now - lastAACommandTimeMs < AA_DEBOUNCE_MS) {
+                            Log.d(TAG, "BLOCKED duplicate Android Auto button")
+                            return true
+                        }
+                        lastAACommandTimeMs = now
+                    }
+                    
+                    Log.d(TAG, "Processing media button ${keyEvent.keyCode}")
+
+                    when (keyEvent.keyCode) {
+                        KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                            
+                            val count = player.mediaItemCount
+                            if (count <= 0) return true
+                            
+                            armTransitionMute()
+                            val wasPlayWhenReady = player.playWhenReady
+                            val index = player.currentMediaItemIndex
+                            val nextIndex = if (index >= count - 1) 0 else index + 1
+                            
+                            Log.d(TAG, "Media Next: index=$index -> $nextIndex (count=$count)")
+                            player.seekTo(nextIndex, 0)
+                            player.prepare()
+                            player.playWhenReady = wasPlayWhenReady
+                            return true
+                        }
+
+                        KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                            
+                            val count = player.mediaItemCount
+                            if (count <= 0) return true
+                            
+                            armTransitionMute()
+                            val wasPlayWhenReady = player.playWhenReady
+                            val index = player.currentMediaItemIndex
+                            val prevIndex = if (index <= 0) count - 1 else index - 1
+                            
+                            Log.d(TAG, "Media Previous: index=$index -> $prevIndex (count=$count)")
+                            player.seekTo(prevIndex, 0)
+                            player.prepare()
+                            player.playWhenReady = wasPlayWhenReady
+                            return true
+                        }
+                    }
+
+                    return super.onMediaButtonEvent(session, controllerInfo, intent)
                 }
             }
         ).build()
@@ -388,28 +707,68 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
     }
 
     private fun createPlayer(): androidx.media3.exoplayer.ExoPlayer {
+        val transferListener = object : TransferListener {
+            override fun onTransferInitializing(
+                source: androidx.media3.datasource.DataSource,
+                dataSpec: DataSpec,
+                isNetwork: Boolean
+            ) {
+                if (isNetwork) {
+                    Log.d(TAG, "HTTP init: ${dataSpec.uri}")
+                }
+            }
+
+            override fun onTransferStart(
+                source: androidx.media3.datasource.DataSource,
+                dataSpec: DataSpec,
+                isNetwork: Boolean
+            ) {
+                if (isNetwork) {
+                    Log.d(TAG, "HTTP start: ${dataSpec.httpMethod} ${dataSpec.uri}")
+                }
+            }
+
+            override fun onBytesTransferred(
+                source: androidx.media3.datasource.DataSource,
+                dataSpec: DataSpec,
+                isNetwork: Boolean,
+                bytesTransferred: Int
+            ) {
+            }
+
+            override fun onTransferEnd(
+                source: androidx.media3.datasource.DataSource,
+                dataSpec: DataSpec,
+                isNetwork: Boolean
+            ) {
+                if (isNetwork) {
+                    Log.d(TAG, "HTTP end: ${dataSpec.uri}")
+                }
+            }
+        }
+
         val dataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("DashTune/1.0")
             .setConnectTimeoutMs(8000)
             .setReadTimeoutMs(8000)
-        
+            .setTransferListener(transferListener)
+
         val audioAttributes = AudioAttributes.Builder()
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .setUsage(C.USAGE_MEDIA)
             .build()
 
-        // Reduce buffer sizes for better performance
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15000,  // min buffer (default 50s, reduced to 15s)
-                30000,  // max buffer (default 50s, reduced to 30s)
-                2500,   // playback buffer (default 2.5s)
-                5000    // playback after rebuffer (default 5s)
+                15000,
+                30000,
+                2500,
+                5000
             )
             .build()
 
-        return androidx.media3.exoplayer.ExoPlayer.Builder(this)
+        val exoPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this)
             .setAudioAttributes(audioAttributes, true)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(
@@ -418,26 +777,48 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
             )
             .build()
             .apply {
-                // Avoid auto-advancing through the station list on transient stream issues.
-                // Treat playback like a single live stream by repeating the current item only.
-                repeatMode = Player.REPEAT_MODE_ONE
+                // Clear any stale items from previous sessions
+                clearMediaItems()
+                
+                // REPEAT_MODE_ALL allows auto-advance needed for wrap-around
+                repeatMode = Player.REPEAT_MODE_ALL
 
-                // Listen for stream metadata changes to update now playing display
                 addListener(object : Player.Listener {
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        Log.d(TAG, "Media item transition: reason=$reason mediaId=${mediaItem?.mediaId} index=$currentMediaItemIndex")
+                        
+                        if (!fadeInPending) {
+                            armTransitionMute()
+                        }
+                        
+                        // Clear stream metadata on station change to prevent stale data
+                        mediaItem?.let { item ->
+                            val currentExtras = item.mediaMetadata.extras
+                            if (currentExtras?.containsKey("stream_song_artist") == true || 
+                                currentExtras?.containsKey("stream_song_title") == true) {
+                                val clearedExtras = Bundle(currentExtras).apply {
+                                    remove("stream_song_artist")
+                                    remove("stream_song_title")
+                                }
+                                val clearedMetadata = item.mediaMetadata.buildUpon()
+                                    .setExtras(clearedExtras)
+                                    .build()
+                                val clearedItem = item.buildUpon()
+                                    .setMediaMetadata(clearedMetadata)
+                                    .build()
+                                replaceMediaItem(currentMediaItemIndex, clearedItem)
+                                Log.d(TAG, "Cleared stream metadata on station transition")
+                            }
+                        }
+                    }
+                    
                     override fun onVolumeChanged(volume: Float) {
                         if (volume > 0f) {
                             lastNonZeroPlayerVolume = volume
                         }
                     }
-                    override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                        // Recreate EQ for the new audio session.
-                        applyEqPreset(prefs.getString(KEY_EQ_PRESET, DEFAULT_EQ_PRESET).orEmpty())
-                    }
 
                     override fun onPlayerError(error: PlaybackException) {
-                        // Some streams transiently fail (timeouts / chunked transfer / 404 during ad markers).
-                        // If AA treats this as end-of-item it may auto-advance to the next station.
-                        // Retry the current station instead.
                         val index = currentMediaItemIndex
                         Log.w(TAG, "Player error; retrying current item (index=$index code=${error.errorCodeName})", error)
 
@@ -454,8 +835,6 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
 
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         if (playbackState == Player.STATE_ENDED) {
-                            // Live streams should not "end"; when they do, restart current item instead
-                            // of letting the playlist advance.
                             val index = currentMediaItemIndex
                             Log.w(TAG, "Playback ended unexpectedly; restarting (index=$index)")
                             handler.post {
@@ -475,106 +854,170 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
                         }
 
                         if (playbackState == Player.STATE_READY && !playWhenReady && fadeInPending) {
-                            // We paused during the transition to avoid pops. Resume once ready, then fade in.
                             fadeInPending = false
                             playWhenReady = true
                             startFadeIn(fadeInToken, fadeInTargetVolume)
                         }
                     }
 
-                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                        Log.w(TAG, "Media item transition: reason=$reason mediaId=${mediaItem?.mediaId}")
-                        // Muting is already armed in onSetMediaItems; keep this as a fallback.
-                        if (!fadeInPending) {
-                            armTransitionMute()
+                    // onMediaItemTransition method moved and merged with the implementation above
+
+                    override fun onMetadata(metadata: androidx.media3.common.Metadata) {
+                        // Process ICY metadata from radio streams
+                        for (i in 0 until metadata.length()) {
+                            val entry = metadata.get(i)
+                            if (entry is androidx.media3.extractor.metadata.icy.IcyInfo) {
+                                val icyTitle = entry.title?.trim()
+                                Log.d(TAG, "ICY metadata received: title=$icyTitle")
+                                
+                                if (icyTitle != null) {
+                                    processStreamMetadata(icyTitle, null)
+                                }
+                            }
                         }
                     }
 
                     override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
                         val streamTitle = mediaMetadata.title?.toString()?.trim()
                         val streamArtist = mediaMetadata.artist?.toString()?.trim()
-                        Log.d(TAG, "Stream metadata: title=$streamTitle, artist=$streamArtist")
+                        Log.d(TAG, "onMediaMetadataChanged: title=$streamTitle, artist=$streamArtist")
                         
-                        val currentItem = currentMediaItem ?: return
-                        val stationName = currentItem.mediaMetadata.extras?.getString("station_name")
-                            ?: currentItem.mediaMetadata.title?.toString().orEmpty()
-                        
-                        // Parse song info - many streams use "Artist - Title" format
-                        var songArtist: String? = null
-                        var songTitle: String? = null
-                        
-                        // Check if streamTitle contains " - " pattern (Artist - Song)
-                        val rawMetadata = streamTitle ?: streamArtist
-                        if (rawMetadata != null && rawMetadata.contains(" - ")) {
-                            val parts = rawMetadata.split(" - ", limit = 2)
-                            if (parts.size == 2) {
-                                songArtist = parts[0].trim()
-                                songTitle = parts[1].trim()
-                            }
-                        } else if (streamArtist != null && streamTitle != null && 
-                                   streamArtist != streamTitle) {
-                            // Different artist and title provided
-                            songArtist = streamArtist
-                            songTitle = streamTitle
+                        if (streamTitle != null || streamArtist != null) {
+                            processStreamMetadata(streamTitle, streamArtist)
                         }
-                        
-                        // Only update if we have real song info that's different from station name
-                        val hasSongInfo = (songArtist != null || songTitle != null) &&
-                            !songArtist.equals(stationName, ignoreCase = true) &&
-                            !songTitle.equals(stationName, ignoreCase = true) &&
-                            songArtist?.length ?: 0 < 100 && // Skip overly long metadata (station descriptions)
-                            songTitle?.length ?: 0 < 100
-
-                        val existingExtras = currentItem.mediaMetadata.extras
-                        val existingArtist = existingExtras?.getString("stream_song_artist")
-                        val existingTitle = existingExtras?.getString("stream_song_title")
-
-                        val desiredArtist = if (hasSongInfo) songArtist else null
-                        val desiredTitle = if (hasSongInfo) songTitle else null
-
-                        if (existingArtist == desiredArtist && existingTitle == desiredTitle) {
-                            return
-                        }
-                        
-                        val updatedExtras = Bundle(currentItem.mediaMetadata.extras ?: Bundle()).apply {
-                            if (hasSongInfo) {
-                                putString("stream_song_artist", songArtist)
-                                putString("stream_song_title", songTitle)
-                            } else {
-                                remove("stream_song_artist")
-                                remove("stream_song_title")
-                            }
-                        }
-
-                        // Keep AA Now Playing clean: do not set standard artist/title fields to stream metadata.
-                        // Phone UI can read these from extras.
-                        val updatedMetadata = currentItem.mediaMetadata.buildUpon()
-                            .setExtras(updatedExtras)
-                            .build()
-
-                        val updatedItem = currentItem.buildUpon()
-                            .setMediaMetadata(updatedMetadata)
-                            .build()
-
-                        val index = currentMediaItemIndex
-                        replaceMediaItem(index, updatedItem)
                     }
                 })
             }
+
+        return exoPlayer
+    }
+
+    private fun processStreamMetadata(streamTitle: String?, streamArtist: String?) {
+        handler.post {
+            try {
+                val currentItem = player.currentMediaItem
+                if (currentItem == null) {
+                    Log.d(TAG, "processStreamMetadata: no current item")
+                    return@post
+                }
+                
+                val stationName = currentItem.mediaMetadata.extras?.getString("station_name")
+                    ?: currentItem.mediaMetadata.title?.toString().orEmpty()
+                Log.d(TAG, "processStreamMetadata: stationName=$stationName, streamTitle=$streamTitle, streamArtist=$streamArtist")
+
+                var songArtist: String? = null
+                var songTitle: String? = null
+
+                // Try to parse "Artist - Title" format from streamTitle
+                val rawMetadata = streamTitle ?: streamArtist
+                if (rawMetadata != null && rawMetadata.contains(" - ")) {
+                    val parts = rawMetadata.split(" - ", limit = 2)
+                    if (parts.size == 2) {
+                        songArtist = parts[0].trim()
+                        songTitle = parts[1].trim()
+                        Log.d(TAG, "Parsed metadata: artist=$songArtist, title=$songTitle")
+                    }
+                } else if (streamArtist != null && streamTitle != null && streamArtist != streamTitle) {
+                    songArtist = streamArtist
+                    songTitle = streamTitle
+                    Log.d(TAG, "Using separate artist/title: artist=$songArtist, title=$songTitle")
+                }
+
+                // Validate metadata quality
+                val hasSongInfo = (songArtist != null || songTitle != null) &&
+                    !songArtist.equals(stationName, ignoreCase = true) &&
+                    !songTitle.equals(stationName, ignoreCase = true) &&
+                    (songArtist?.length ?: 0) < 100 &&
+                    (songTitle?.length ?: 0) < 100
+
+                Log.d(TAG, "Metadata validation: hasSongInfo=$hasSongInfo")
+
+                val existingExtras = currentItem.mediaMetadata.extras
+                val existingArtist = existingExtras?.getString("stream_song_artist")
+                val existingTitle = existingExtras?.getString("stream_song_title")
+
+                val desiredArtist = if (hasSongInfo) songArtist else null
+                val desiredTitle = if (hasSongInfo) songTitle else null
+
+                // Skip if no change
+                if (existingArtist == desiredArtist && existingTitle == desiredTitle) {
+                    Log.d(TAG, "Metadata unchanged, skipping update")
+                    return@post
+                }
+
+                // Update MediaItem with stream metadata
+                // Store in extras for PlaybackManager AND in title/artist for MediaController notification
+                val updatedExtras = Bundle(currentItem.mediaMetadata.extras ?: Bundle()).apply {
+                    if (hasSongInfo) {
+                        putString("stream_song_artist", songArtist)
+                        putString("stream_song_title", songTitle)
+                    } else {
+                        remove("stream_song_artist")
+                        remove("stream_song_title")
+                    }
+                }
+
+                // Build metadata with BOTH extras and standard fields
+                // MediaController observes title/artist changes, so this will trigger notification
+                val metadataBuilder = currentItem.mediaMetadata.buildUpon()
+                    .setExtras(updatedExtras)
+                
+                if (hasSongInfo) {
+                    // Set title and artist in standard fields to trigger MediaController update
+                    metadataBuilder
+                        .setTitle(songTitle)
+                        .setArtist(songArtist)
+                } else {
+                    // Clear title/artist to show station name only
+                    metadataBuilder
+                        .setTitle(stationName)
+                        .setArtist(null)
+                }
+                
+                val updatedMetadata = metadataBuilder.build()
+
+                val updatedItem = currentItem.buildUpon()
+                    .setMediaMetadata(updatedMetadata)
+                    .build()
+
+                val index = player.currentMediaItemIndex
+                
+                player.replaceMediaItem(index, updatedItem)
+                Log.d(TAG, "✓ Metadata updated: artist=$desiredArtist, title=$desiredTitle (in both extras and standard fields)")
+                
+                // Verify the update
+                val verifyItem = player.currentMediaItem
+                val verifyExtras = verifyItem?.mediaMetadata?.extras
+                Log.d(TAG, "Verification: extras keys=${verifyExtras?.keySet()?.joinToString()}, artist=${verifyExtras?.getString("stream_song_artist")}, title=${verifyExtras?.getString("stream_song_title")}")
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in processStreamMetadata", e)
+            }
+        }
     }
 
     private fun startFadeIn(token: Int, target: Float) {
         if (target <= 0f) return
 
-        val steps = 10
+        Log.d(TAG, "startFadeIn called: token=$token, fadeInToken=$fadeInToken, target=$target")
+        // Fade in from 0 to target volume over 100ms
+        val steps = 4
         val stepMs = 25L
         for (i in 1..steps) {
             handler.postDelayed({
-                if (token != fadeInToken) return@postDelayed
-                player.volume = target * (i.toFloat() / steps.toFloat())
+                if (token != fadeInToken) {
+                    Log.d(TAG, "startFadeIn step $i skipped: token mismatch ($token != $fadeInToken)")
+                    return@postDelayed
+                }
+                val newVolume = target * (i.toFloat() / steps.toFloat())
+                Log.d(TAG, "startFadeIn step $i/$steps: setting volume to $newVolume")
+                player.volume = newVolume
             }, i * stepMs)
         }
     }
+    
+    // These methods are no longer used - we've switched to direct implementation in the handlers
+    // with a time-based debounce window
 
     private fun buildStationItems(stations: List<RadioStation>): List<MediaItem> {
         return stations.mapIndexed { index, station ->
@@ -588,6 +1031,7 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
             .setIsPlayable(true)
             .setTitle(station.name)
             .setDisplayTitle(station.name)
+            .setSubtitle("Station $stationNumber")
 
         applyStationArtwork(metadataBuilder, station)
 
@@ -683,113 +1127,9 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
             prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         } catch (_: Exception) {
         }
-        releaseEqualizer()
         mediaLibrarySession.release()
         player.release()
         super.onDestroy()
-    }
-
-    private fun applyEqPreset(presetRaw: String) {
-        val preset = presetRaw.trim().ifBlank { DEFAULT_EQ_PRESET }
-        if (preset.equals("Off", ignoreCase = true)) {
-            releaseEqualizer()
-            return
-        }
-
-        val audioSessionId = try {
-            player.audioSessionId
-        } catch (_: Exception) {
-            0
-        }
-
-        if (audioSessionId == 0) {
-            // Player not fully initialized yet; we'll apply when the audio session becomes available.
-            return
-        }
-
-        val eq = ensureEqualizer(audioSessionId) ?: return
-        eq.enabled = true
-
-        val bands = eq.numberOfBands.toInt().coerceAtLeast(0)
-        if (bands == 0) return
-
-        val range = eq.bandLevelRange
-        val minLevel = range[0]
-        val maxLevel = range[1]
-        val boost = ((maxLevel - minLevel) / 4).toShort()
-        val mild = ((maxLevel - minLevel) / 8).toShort()
-
-        for (band in 0 until bands) {
-            val bandShort = band.toShort()
-            val pos = band.toFloat() / (bands - 1).coerceAtLeast(1)
-
-            val target: Int = when (preset) {
-                "Normal" -> 0
-                "Bass Boost" -> if (pos <= 0.35f) boost.toInt() else 0
-                "Treble Boost" -> if (pos >= 0.65f) boost.toInt() else 0
-                "Vocal" -> if (pos in 0.35f..0.65f) boost.toInt() else (-mild).toInt()
-                "Rock" -> when {
-                    pos <= 0.20f -> boost.toInt()
-                    pos in 0.20f..0.50f -> 0
-                    else -> boost.toInt()
-                }
-                "Pop" -> when {
-                    pos <= 0.25f -> mild.toInt()
-                    pos in 0.25f..0.65f -> boost.toInt()
-                    else -> mild.toInt()
-                }
-                else -> 0
-            }
-
-            val clamped = target.coerceIn(minLevel.toInt(), maxLevel.toInt()).toShort()
-            try {
-                eq.setBandLevel(bandShort, clamped)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to set EQ band level band=$bandShort", e)
-            }
-        }
-    }
-
-    private fun ensureEqualizer(audioSessionId: Int): Equalizer? {
-        val existing = equalizer
-        if (existing != null) {
-            return try {
-                // If the audio session changed, recreate.
-                if (equalizerAudioSessionId != audioSessionId) {
-                    releaseEqualizer()
-                    createEqualizer(audioSessionId)
-                } else {
-                    existing
-                }
-            } catch (_: Exception) {
-                releaseEqualizer()
-                createEqualizer(audioSessionId)
-            }
-        }
-
-        return createEqualizer(audioSessionId)
-    }
-
-    private fun createEqualizer(audioSessionId: Int): Equalizer? {
-        return try {
-            Equalizer(0, audioSessionId).also {
-                equalizer = it
-                equalizerAudioSessionId = audioSessionId
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Equalizer not available on this device", e)
-            null
-        }
-    }
-
-    private fun releaseEqualizer() {
-        try {
-            equalizer?.release()
-        } catch (_: Exception) {
-        } finally {
-            equalizer = null
-            equalizerAudioSessionId = 0
-        }
     }
 
     companion object {
@@ -803,8 +1143,6 @@ class DashTuneMediaLibraryService : MediaLibraryService() {
         private const val PREFS_NAME = "dashtune_prefs"
         private const val KEY_VOLUME_MULTIPLIER = "volume_multiplier"
         private const val DEFAULT_VOLUME_MULTIPLIER = 0.7f
-        private const val KEY_EQ_PRESET = "eq_preset"
-        private const val DEFAULT_EQ_PRESET = "Off"
         
         // Content style hints for Android Auto grid display
         private const val CONTENT_STYLE_BROWSABLE_HINT = "android.media.browse.CONTENT_STYLE_BROWSABLE_HINT"

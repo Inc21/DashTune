@@ -15,7 +15,9 @@ import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
@@ -57,10 +59,51 @@ class RadioPlayerService : Service() {
     override fun onCreate() {
         super.onCreate()
         
+        val transferListener = object : TransferListener {
+            override fun onTransferInitializing(
+                source: androidx.media3.datasource.DataSource,
+                dataSpec: DataSpec,
+                isNetwork: Boolean
+            ) {
+                if (isNetwork) {
+                    Log.d(TAG, "HTTP init: ${dataSpec.uri}")
+                }
+            }
+
+            override fun onTransferStart(
+                source: androidx.media3.datasource.DataSource,
+                dataSpec: DataSpec,
+                isNetwork: Boolean
+            ) {
+                if (isNetwork) {
+                    Log.d(TAG, "HTTP start: ${dataSpec.httpMethod} ${dataSpec.uri}")
+                }
+            }
+
+            override fun onBytesTransferred(
+                source: androidx.media3.datasource.DataSource,
+                dataSpec: DataSpec,
+                isNetwork: Boolean,
+                bytesTransferred: Int
+            ) {
+            }
+
+            override fun onTransferEnd(
+                source: androidx.media3.datasource.DataSource,
+                dataSpec: DataSpec,
+                isNetwork: Boolean
+            ) {
+                if (isNetwork) {
+                    Log.d(TAG, "HTTP end: ${dataSpec.uri}")
+                }
+            }
+        }
+        
         // Configure DataSource to follow redirects
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("DashTune/1.0")
+            .setTransferListener(transferListener)
         
         val audioAttributes = AudioAttributes.Builder()
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)

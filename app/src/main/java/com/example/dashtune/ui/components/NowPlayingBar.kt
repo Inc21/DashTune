@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
@@ -33,6 +34,8 @@ fun NowPlayingBar(
     onSaveClick: () -> Unit,
     onBarClick: () -> Unit,
     onMetadataClick: ((String, String) -> Unit)? = null,
+    stationNumber: Int? = null,
+    isPlayingInAA: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -91,7 +94,7 @@ fun NowPlayingBar(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         
-                        // Live metadata (song - artist) or country
+                        // Live metadata (song - artist) - leave blank if not available
                         if (metadata?.first != null || metadata?.second != null) {
                             val metadataText = when {
                                 metadata.first != null && metadata.second != null -> 
@@ -100,33 +103,42 @@ fun NowPlayingBar(
                                 else -> metadata.second!!
                             }
                             val hasAnyMetadata = !metadata.first.isNullOrBlank() || !metadata.second.isNullOrBlank()
-                            Text(
-                                text = metadataText,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = if (hasAnyMetadata && onMetadataClick != null) {
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = rememberRipple()
-                                    ) { 
-                                        onMetadataClick(metadata.first.orEmpty(), metadata.second.orEmpty())
+                            if (hasAnyMetadata) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = metadataText,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = if (onMetadataClick != null) {
+                                            Modifier
+                                                .weight(1f)
+                                                .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = rememberRipple()
+                                            ) { 
+                                                onMetadataClick(metadata.first.orEmpty(), metadata.second.orEmpty())
+                                            }
+                                        } else {
+                                            Modifier.weight(1f)
+                                        }
+                                    )
+                                    
+                                    // Car icon when playing in AA
+                                    if (isPlayingInAA) {
+                                        Icon(
+                                            imageVector = Icons.Default.DirectionsCar,
+                                            contentDescription = "Playing in Android Auto",
+                                            modifier = Modifier.size(14.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
                                     }
-                                } else {
-                                    Modifier.fillMaxWidth()
                                 }
-                            )
-                        } else if (station.country.isNotBlank()) {
-                            Text(
-                                text = station.country,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
+                            }
                         }
                     }
                     

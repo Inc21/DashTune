@@ -31,7 +31,6 @@ fun SettingsScreen(
     val context = LocalContext.current
     val volumeMultiplier by viewModel.volumeMultiplier.collectAsState()
     val openLinksInSpotify by viewModel.openLinksInSpotify.collectAsState()
-    val eqPreset by viewModel.eqPreset.collectAsState()
     val isSleepTimerActive by viewModel.isSleepTimerActive.collectAsState()
     val sleepTimerRemainingMinutes by viewModel.sleepTimerRemainingMinutes.collectAsState()
     
@@ -64,8 +63,6 @@ fun SettingsScreen(
                 onVolumeMultiplierChange = { viewModel.setVolumeMultiplier(it) },
                 openLinksInSpotify = openLinksInSpotify,
                 onOpenLinksInSpotifyChange = { viewModel.setOpenLinksInSpotify(it) },
-                eqPreset = eqPreset,
-                onEqPresetChange = { viewModel.setEqPreset(it) },
                 isSleepTimerActive = isSleepTimerActive,
                 sleepTimerRemainingMinutes = sleepTimerRemainingMinutes,
                 onStartSleepTimer = { minutes -> viewModel.startSleepTimer(minutes) },
@@ -100,15 +97,12 @@ private fun SettingsSection(
     onVolumeMultiplierChange: (Float) -> Unit,
     openLinksInSpotify: Boolean,
     onOpenLinksInSpotifyChange: (Boolean) -> Unit,
-    eqPreset: String,
-    onEqPresetChange: (String) -> Unit,
     isSleepTimerActive: Boolean,
     sleepTimerRemainingMinutes: Int,
     onStartSleepTimer: (Int) -> Unit,
     onCancelSleepTimer: () -> Unit
 ) {
     var showTimerDialog by remember { mutableStateOf(false) }
-    var showEqDialog by remember { mutableStateOf(false) }
     
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
@@ -152,38 +146,6 @@ private fun SettingsSection(
             }
         }
         
-        // Equalizer
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { showEqDialog = true },
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Equalizer",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = eqPreset.ifBlank { "Off" },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
-            }
-        }
-
         // Links
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -279,54 +241,6 @@ private fun SettingsSection(
         )
     }
 
-    if (showEqDialog) {
-        val presets = listOf(
-            "Off",
-            "Normal",
-            "Bass Boost",
-            "Treble Boost",
-            "Vocal",
-            "Rock",
-            "Pop"
-        )
-
-        AlertDialog(
-            onDismissRequest = { showEqDialog = false },
-            title = { Text("Equalizer") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    presets.forEach { preset ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    onEqPresetChange(preset)
-                                    showEqDialog = false
-                                }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = eqPreset == preset,
-                                onClick = {
-                                    onEqPresetChange(preset)
-                                    showEqDialog = false
-                                }
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(preset)
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showEqDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 }
 
 @Composable

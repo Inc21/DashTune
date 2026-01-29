@@ -43,7 +43,6 @@ class HomeViewModel @Inject constructor(
     val currentMetadata = playbackManager.currentMetadata
     val volumeMultiplier = playbackManager.volumeMultiplier
     val openLinksInSpotify = playbackManager.openLinksInSpotify
-    val eqPreset = playbackManager.eqPreset
     val playingStationId = playbackManager.playingStationId
     
     val isSleepTimerActive = sleepTimerManager.isTimerActive
@@ -196,10 +195,6 @@ class HomeViewModel @Inject constructor(
 
     fun setOpenLinksInSpotify(enabled: Boolean) {
         playbackManager.setOpenLinksInSpotify(enabled)
-    }
-
-    fun setEqPreset(preset: String) {
-        playbackManager.setEqPreset(preset)
     }
     
     fun startSleepTimer(durationMinutes: Int) {

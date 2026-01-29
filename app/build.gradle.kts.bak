@@ -71,9 +71,10 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.5.0")
     
     // Media Player
-    implementation("androidx.media3:media3-exoplayer:1.2.1")
-    implementation("androidx.media3:media3-ui:1.2.1")
-    implementation("androidx.media3:media3-session:1.2.1")
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
+    implementation("androidx.media3:media3-session:1.4.1")
+    implementation("androidx.media3:media3-common:1.4.1")
     
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.7.3")
